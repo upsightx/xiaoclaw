@@ -8,6 +8,7 @@ from .memory import MemoryManager
 from .skills import SkillRegistry, Skill
 from .web import web_search, web_fetch
 from .plugins import PluginManager
+from .battle import BattleEngine, BattleToolWrapper, PRESET_ROLES
 
 __version__ = VERSION
 __all__ = [
@@ -19,4 +20,5 @@ __all__ = [
     "SkillRegistry", "Skill",
     "web_search", "web_fetch",
     "PluginManager",
+    "BattleEngine", "BattleToolWrapper", "PRESET_ROLES",
 ]
