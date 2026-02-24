@@ -1,4 +1,4 @@
-"""XiaClaw Session Management - JSONL persistence compatible with OpenClaw"""
+"""xiaoclaw Session Management - JSONL persistence compatible with OpenClaw"""
 import json
 import time
 import uuid
@@ -12,7 +12,7 @@ try:
 except ImportError:
     HAS_TIKTOKEN = False
 
-logger = logging.getLogger("XiaClaw.Session")
+logger = logging.getLogger("xiaoclaw.Session")
 
 DEFAULT_SESSIONS_DIR = Path(".xiaoclaw/sessions")
 
@@ -59,7 +59,11 @@ class Session:
         return count_messages_tokens(self.messages)
 
     def add_message(self, role: str, content: str, **extra) -> Dict:
-        msg = {"role": role, "content": content, "ts": time.time(), **extra}
+        msg = {"role": role, "content": content, "ts": time.time()}
+        # Preserve tool_calls, tool_call_id, name for function calling
+        for k in ("tool_calls", "tool_call_id", "name"):
+            if k in extra:
+                msg[k] = extra[k]
         self.messages.append(msg)
         self.metadata["updated_at"] = time.time()
         self._append_line(msg)
@@ -106,7 +110,7 @@ class Session:
             self._file.unlink()
 
     def get_context_window(self, max_tokens: int = 8000) -> List[Dict]:
-        """Get recent messages fitting within token budget."""
+        """Get recent messages fitting within token budget, preserving tool call structure."""
         result = []
         tokens = 0
         for msg in reversed(self.messages):
@@ -114,7 +118,15 @@ class Session:
             mt = count_tokens(content) + 4 if isinstance(content, str) else 100
             if tokens + mt > max_tokens and result:
                 break
-            result.insert(0, {"role": msg["role"], "content": content})
+            # Build API-compatible message
+            m = {"role": msg["role"], "content": content}
+            if "tool_calls" in msg:
+                m["tool_calls"] = msg["tool_calls"]
+            if "tool_call_id" in msg:
+                m["tool_call_id"] = msg["tool_call_id"]
+            if "name" in msg and msg["role"] == "tool":
+                m["name"] = msg["name"]
+            result.insert(0, m)
             tokens += mt
         return result
 
