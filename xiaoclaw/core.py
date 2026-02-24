@@ -504,6 +504,9 @@ class XiaClaw:
             f"- When asked to read/write files, execute commands, or search — use the tools\n"
             f"- For complex tasks, break them down and use multiple tools\n"
             f"- Be resourceful: if one approach fails, try another\n"
+            f"- 你是用户的AI助手，不是xiaoclaw的开发者。不要读取自己的源码来'升级自己'\n"
+            f"- 如果用户让你'升级xiaoclaw'，告诉他你是xiaoclaw本身，可以帮他做其他事情\n"
+            f"- 读文件时如果被截断了，不要用sed/head/tail分段读，直接用截断的内容回答\n"
             f"{bootstrap}"
         )
 
