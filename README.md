@@ -1,4 +1,4 @@
-# XiaClaw 🐾
+# xiaoclaw 🐾
 
 Lightweight AI Agent — OpenClaw-compatible, minimal core, security first.
 
@@ -121,7 +121,7 @@ xiaoclaw/
 
 ## 与OpenClaw对比
 
-| | OpenClaw | XiaClaw |
+| | OpenClaw | xiaoclaw |
 |---|---|---|
 | 代码 | 430K行 | ~1.2K行 |
 | 启动 | 30s+ | <3s |
