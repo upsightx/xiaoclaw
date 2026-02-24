@@ -2,8 +2,10 @@
 
 Lightweight AI Agent — OpenClaw-compatible, minimal core, security first.
 
-## v0.2.0 特性
+## v0.3.0 特性
 
+- 📦 **pip install** — `pip install xiaoclaw` + `xiaoclaw` CLI命令
+- 🤖 **Telegram适配器** — python-telegram-bot集成
 - 🧠 **多Provider** — 支持多个LLM provider，运行时切换模型
 - 💾 **Session持久化** — JSONL格式，兼容OpenClaw，支持恢复/列表/删除
 - 📝 **Memory系统** — MEMORY.md + memory/YYYY-MM-DD.md，memory_search/memory_get

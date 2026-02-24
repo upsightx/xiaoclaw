@@ -13,7 +13,7 @@ except ImportError:
 logger = logging.getLogger("xiaoclaw.Web")
 
 HEADERS = {
-    "User-Agent": "Mozilla/5.0 (compatible; xiaoclaw/0.2; +https://github.com/upsightx/xiaoclaw)"
+    "User-Agent": "Mozilla/5.0 (compatible; xiaoclaw/0.3; +https://github.com/upsightx/xiaoclaw)"
 }
 
 

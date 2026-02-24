@@ -1,0 +1,46 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "xiaoclaw"
+version = "0.3.0"
+description = "Lightweight AI Agent compatible with OpenClaw ecosystem"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.10"
+authors = [{name = "upsightx"}]
+keywords = ["ai", "agent", "llm", "openclaw"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+    "openai>=1.0.0",
+    "tiktoken>=0.5.0",
+    "pyyaml>=6.0",
+    "aiohttp>=3.9.0",
+    "requests>=2.31.0",
+]
+
+[project.optional-dependencies]
+telegram = ["python-telegram-bot>=21.0"]
+feishu = []
+all = ["python-telegram-bot>=21.0"]
+dev = ["pytest", "pytest-asyncio"]
+
+[project.scripts]
+xiaoclaw = "xiaoclaw.core:_cli_entry"
+
+[project.urls]
+Homepage = "https://github.com/upsightx/xiaoclaw"
+Repository = "https://github.com/upsightx/xiaoclaw"
+
+[tool.setuptools.packages.find]
+include = ["xiaoclaw*"]

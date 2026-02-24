@@ -19,7 +19,7 @@ from .web import web_search as _web_search, web_fetch as _web_fetch
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(name)s] %(levelname)s %(message)s')
 logger = logging.getLogger("xiaoclaw")
 
-VERSION = "0.2.0"
+VERSION = "0.3.0"
 
 # ─── Config ───────────────────────────────────────────
 
@@ -464,5 +464,9 @@ async def main():
             print(chunk, end="", flush=True)
         print()  # newline after stream
 
-if __name__ == "__main__":
+def _cli_entry():
+    """Entry point for `xiaoclaw` console command."""
     asyncio.run(main())
+
+if __name__ == "__main__":
+    _cli_entry()

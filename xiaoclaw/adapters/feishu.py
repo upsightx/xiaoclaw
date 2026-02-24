@@ -8,7 +8,7 @@ import json
 import logging
 from typing import Dict, Any, Optional
 
-logger = logging.getLogger("XiaClaw.Fishu")
+logger = logging.getLogger("xiaoclaw.Fishu")
 
 # 飞书配置
 FEISHU_APP_ID = os.getenv("FEISHU_APP_ID", "")

@@ -1,67 +1,80 @@
 #!/usr/bin/env python3
 """Test script for xiaoclaw"""
-
 import asyncio
 import sys
 sys.path.insert(0, '/app')
 
-from xiaoclaw.core import XiaClaw, XiaClawConfig
+from xiaoclaw.core import XiaClaw, XiaClawConfig, VERSION
 
 
 async def test_core():
-    """测试核心功能"""
-    print("=== Testing xiaoclaw Core ===\n")
-    
-    # 创建配置
-    config = XiaClawConfig(
-        debug=True,
-        security_level="strict"
-    )
-    
-    # 创建实例
+    print(f"=== Testing xiaoclaw v{VERSION} ===\n")
+
+    config = XiaClawConfig(debug=True, security_level="strict")
     claw = XiaClaw(config)
-    
-    # 测试1: 列出工具
+
+    # Test 1: Tools
     print("Test 1: List tools")
-    tools = claw.tools.list_tools()
-    print(f"  Available tools: {tools}\n")
-    
-    # 测试2: 读取文件（模拟）
-    print("Test 2: Read file (mock)")
-    result = claw.tools._tool_read("/etc/hostname")
-    print(f"  Result: {result[:100]}...\n")
-    
-    # 测试3: 写文件
+    tools = claw.tools.list_names()
+    print(f"  Tools: {tools}")
+    assert len(tools) > 0, "No tools registered"
+    print("  ✓ Pass\n")
+
+    # Test 2: Read file
+    print("Test 2: Read file")
+    result = claw.tools.call("read", {"file_path": "/etc/hostname"})
+    print(f"  Result: {result[:100]}")
+    assert "Error" not in result or "not found" in result
+    print("  ✓ Pass\n")
+
+    # Test 3: Write file
     print("Test 3: Write file")
-    result = claw.tools._tool_write("Hello from xiaoclaw!", "/tmp/test_xiaoclaw.txt")
-    print(f"  Result: {result}\n")
-    
-    # 测试4: 执行命令
+    result = claw.tools.call("write", {"file_path": "/tmp/test_xiaoclaw.txt", "content": "Hello from xiaoclaw!"})
+    print(f"  Result: {result}")
+    assert "Written" in result
+    print("  ✓ Pass\n")
+
+    # Test 4: Exec command
     print("Test 4: Exec command")
-    result = claw.tools._tool_exec("echo 'xiaoclaw works!'")
-    print(f"  Result: {result}\n")
-    
-    # 测试5: 处理消息
-    print("Test 5: Handle message")
-    messages = [
-        "hello",
-        "what tools do you have?",
-        "version",
-        "test write tool"
-    ]
-    for msg in messages:
-        response = await claw.handle_message(msg)
-        print(f"  User: {msg}")
-        print(f"  xiaoclaw: {response}\n")
-    
-    # 测试6: 安全检查
-    print("Test 6: Security check")
-    is_dangerous = claw.security.is_dangerous("exec", "rm -rf /")
-    print(f"  Is 'rm -rf /' dangerous? {is_dangerous}")
-    
-    is_dangerous2 = claw.security.is_dangerous("exec", "ls")
-    print(f"  Is 'ls' dangerous? {is_dangerous2}\n")
-    
+    result = claw.tools.call("exec", {"command": "echo 'xiaoclaw works!'"})
+    print(f"  Result: {result}")
+    assert "xiaoclaw works" in result
+    print("  ✓ Pass\n")
+
+    # Test 5: Security
+    print("Test 5: Security check")
+    assert claw.security.is_dangerous("rm -rf /")
+    assert not claw.security.is_dangerous("ls")
+    print("  ✓ Pass\n")
+
+    # Test 6: Handle messages
+    print("Test 6: Handle messages")
+    for msg in ["你好", "工具列表"]:
+        r = await claw.handle_message(msg)
+        print(f"  > {msg}")
+        print(f"  < {r[:200]}\n")
+
+    # Test 7: Session
+    print("Test 7: Session")
+    assert len(claw.session.messages) > 0
+    claw.session.save()
+    sessions = claw.session_mgr.list_sessions()
+    print(f"  Sessions: {len(sessions)}")
+    print("  ✓ Pass\n")
+
+    # Test 8: Module tests
+    print("Test 8: Module self-tests")
+    from xiaoclaw.providers import test_providers; test_providers()
+    from xiaoclaw.session import test_session; test_session()
+    from xiaoclaw.memory import test_memory; test_memory()
+    from xiaoclaw.skills import test_skills; test_skills()
+    print()
+
+    # Test 9: Version
+    print(f"Test 9: Version = {VERSION}")
+    assert VERSION == "0.3.0"
+    print("  ✓ Pass\n")
+
     print("=== All Tests Passed! ===")
 
 
