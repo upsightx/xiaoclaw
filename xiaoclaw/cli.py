@@ -7,6 +7,27 @@ from pathlib import Path
 from .core import XiaClaw, XiaClawConfig, VERSION
 
 
+async def _save_session_memory(claw):
+    """Save important conversation info to daily memory on quit."""
+    try:
+        msgs = claw.session.messages
+        if len(msgs) < 2:
+            return
+        # Extract key user messages for daily log
+        from datetime import datetime
+        entries = []
+        for msg in msgs:
+            if msg.get("role") == "user":
+                content = msg.get("content", "")
+                if isinstance(content, str) and content.strip() and not content.startswith("/"):
+                    entries.append(f"- User: {content[:100]}")
+        if entries:
+            summary = f"## Session Summary\n" + "\n".join(entries[:10])
+            claw.memory.append_daily(summary)
+    except Exception:
+        pass
+
+
 async def main():
     # Quick flags
     if "--version" in sys.argv or "-V" in sys.argv:
@@ -18,20 +39,26 @@ async def main():
         if arg == "--config" and i + 1 < len(sys.argv):
             config_path = sys.argv[i + 1]
 
-    # Support --log-level
+    config = XiaClawConfig.from_yaml(config_path) if config_path else XiaClawConfig.from_env()
+
+    # Default: WARNING level. --debug for verbose
+    if "--debug" in sys.argv:
+        logging.getLogger().setLevel(logging.DEBUG)
+        logging.getLogger("xiaoclaw").setLevel(logging.DEBUG)
+        logging.getLogger("httpx").setLevel(logging.INFO)
+    else:
+        logging.getLogger().setLevel(logging.WARNING)
+        logging.getLogger("xiaoclaw").setLevel(logging.WARNING)
+        logging.getLogger("httpx").setLevel(logging.WARNING)
+        logging.getLogger("httpcore").setLevel(logging.WARNING)
+        logging.getLogger("openai").setLevel(logging.WARNING)
+
+    # Support --log-level override
     for i, arg in enumerate(sys.argv):
         if arg == "--log-level" and i + 1 < len(sys.argv):
             lvl = sys.argv[i + 1].upper()
             if lvl in ("DEBUG", "INFO", "WARNING", "ERROR"):
                 logging.getLogger().setLevel(getattr(logging, lvl))
-
-    config = XiaClawConfig.from_yaml(config_path) if config_path else XiaClawConfig.from_env()
-
-    # Quiet mode by default, --debug for verbose
-    if "--debug" in sys.argv:
-        logging.getLogger().setLevel(logging.DEBUG)
-        logging.getLogger("xiaoclaw").setLevel(logging.DEBUG)
-        logging.getLogger("httpx").setLevel(logging.INFO)
 
     claw = XiaClaw(config)
     p = claw.providers.active
@@ -87,11 +114,18 @@ async def main():
     print("─" * 50)
     while True:
         try: user_input = input("\n🧑 You: ").strip()
-        except (KeyboardInterrupt, EOFError): print("\nBye!"); break
+        except (KeyboardInterrupt, EOFError):
+            await _save_session_memory(claw)
+            print("\nBye!")
+            break
         if not user_input: continue
         cmd = user_input.lower().split()[0] if user_input.startswith("/") else ""
         cmd = ALIASES.get(cmd, cmd)
-        if cmd in ("/quit", "/exit"): claw.session.save(); print("Bye!"); break
+        if cmd in ("/quit", "/exit"):
+            claw.session.save()
+            await _save_session_memory(claw)
+            print("Bye!")
+            break
         if cmd in CMDS: CMDS[cmd](); continue
         if cmd == "/skills":
             for n in claw.skills.list_skills():
