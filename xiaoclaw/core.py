@@ -33,7 +33,7 @@ class XiaClawConfig:
     debug: bool = False
     security_level: str = "strict"
     workspace: str = "."
-    max_context_tokens: int = 8000
+    max_context_tokens: int = 32000
     compaction_threshold: int = 6000
     default_model: str = "claude-opus-4-6"
     api_key: str = "sk-iHus2xPomk0gCRPcqhxbLOw8zffMUeg7pryj1qnO5Cb698pW"
@@ -45,7 +45,7 @@ class XiaClawConfig:
             debug=os.getenv("XIAOCLAW_DEBUG", "false").lower() == "true",
             security_level=os.getenv("XIAOCLAW_SECURITY", "strict"),
             workspace=os.getenv("XIAOCLAW_WORKSPACE", "."),
-            max_context_tokens=int(os.getenv("XIAOCLAW_MAX_TOKENS", "8000")),
+            max_context_tokens=int(os.getenv("XIAOCLAW_MAX_TOKENS", "32000")),
             compaction_threshold=int(os.getenv("XIAOCLAW_COMPACT_THRESHOLD", "6000")),
             api_key=os.getenv("OPENAI_API_KEY", "sk-iHus2xPomk0gCRPcqhxbLOw8zffMUeg7pryj1qnO5Cb698pW"),
             base_url=os.getenv("OPENAI_BASE_URL", "https://ai.ltcraft.cn:12000/v1"),
@@ -75,7 +75,7 @@ class XiaClawConfig:
             debug=cfg.get("debug", os.getenv("XIAOCLAW_DEBUG", "false").lower() == "true"),
             security_level=cfg.get("security", os.getenv("XIAOCLAW_SECURITY", "strict")),
             workspace=cfg.get("workspace", os.getenv("XIAOCLAW_WORKSPACE", ".")),
-            max_context_tokens=cfg.get("max_context_tokens", int(os.getenv("XIAOCLAW_MAX_TOKENS", "8000"))),
+            max_context_tokens=cfg.get("max_context_tokens", int(os.getenv("XIAOCLAW_MAX_TOKENS", "32000"))),
             compaction_threshold=cfg.get("compaction_threshold", int(os.getenv("XIAOCLAW_COMPACT_THRESHOLD", "6000"))),
             api_key=_resolve(default_provider.get("api_key", os.getenv("OPENAI_API_KEY", ""))),
             base_url=default_provider.get("base_url", os.getenv("OPENAI_BASE_URL", "https://ai.ltcraft.cn:12000/v1")),
@@ -579,13 +579,42 @@ class XiaClaw:
 
     async def _agent_loop(self, sys_prompt: str, stream: bool = False):
         """Core agent loop: LLM → tool calls → repeat."""
-        max_rounds = 10
+        max_rounds = 20
         client = self.providers.active.client
         model = self.providers.active.current_model
 
         for round_num in range(max_rounds):
             ctx = self.session.get_context_window(self.config.max_context_tokens)
             all_msgs = [{"role": "system", "content": sys_prompt}] + ctx
+
+            if stream and round_num > 0:
+                # After tool calls, try streaming the final response directly
+                try:
+                    full = ""
+                    async for chunk in await client.chat.completions.create(
+                        model=model, messages=all_msgs,
+                        tools=self.tools.openai_functions(),
+                        max_tokens=2000, stream=True,
+                    ):
+                        if not chunk.choices:
+                            continue
+                        delta = chunk.choices[0].delta
+                        # If streaming returns tool_calls, fall back to non-stream
+                        if delta.tool_calls:
+                            # Can't handle tool_calls in stream easily, break and retry non-stream
+                            full = None
+                            break
+                        content = delta.content or ""
+                        if content:
+                            full += content
+                            yield content
+                    if full is not None:
+                        text = re.sub(r'<think>.*?</think>\s*', '', full, flags=re.DOTALL).strip()
+                        if text:
+                            self.session.add_message("assistant", text)
+                        return
+                except Exception as e:
+                    logger.warning(f"Stream attempt failed: {e}, falling back to non-stream")
 
             try:
                 resp = await self._llm_call_with_retry(
@@ -613,6 +642,9 @@ class XiaClaw:
                     await self.hooks.fire("before_tool_call", tool=name, args=args)
                     self.security.log_tool_call(name, args)
                     result = self.tools.call(name, args)
+                    # Truncate long tool results to avoid context overflow
+                    if len(result) > 3000:
+                        result = result[:3000] + f"\n... [truncated, {len(result)} chars total]"
                     self.stats.record_tool()
                     await self.hooks.fire("after_tool_call", tool=name, args=args, result=result)
                     logger.info(f"Tool: {name}({list(args.keys())}) → {len(result)} chars")
@@ -630,32 +662,19 @@ class XiaClaw:
                         yield f"\n  {_friendly_tool_display(name, args)}\n"
                 continue
 
-            if stream:
-                ctx = self.session.get_context_window(self.config.max_context_tokens)
-                all_msgs = [{"role": "system", "content": sys_prompt}] + ctx
-                full = ""
-                try:
-                    async for chunk in await client.chat.completions.create(
-                        model=model, messages=all_msgs, max_tokens=2000, stream=True,
-                    ):
-                        delta = chunk.choices[0].delta.content or "" if chunk.choices else ""
-                        if delta:
-                            full += delta
-                            yield delta
-                except Exception as e:
-                    logger.error(f"Stream error: {e}")
-                    full = choice.message.content or ""
-                    yield full
-                text = re.sub(r'<think>.*?</think>\s*', '', full, flags=re.DOTALL).strip()
-                if text:
-                    self.session.add_message("assistant", text)
-                return
-
+            # Final text response (no tool calls)
             text = choice.message.content or ""
             text = re.sub(r'<think>.*?</think>\s*', '', text, flags=re.DOTALL).strip()
             if text:
                 self.session.add_message("assistant", text)
-            yield text; return
+
+            if stream:
+                # Stream the already-obtained text character by character for smooth output
+                for char in text:
+                    yield char
+            else:
+                yield text
+            return
 
         yield "[Agent loop exceeded max rounds]"
 
