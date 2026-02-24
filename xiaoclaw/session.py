@@ -155,12 +155,15 @@ class Session:
         m = {"role": msg["role"]}
         content = msg.get("content", "")
         if msg.get("role") == "assistant" and "tool_calls" in msg:
-            m["content"] = content if content else None
+            # Some providers reject null content; use empty string instead
+            m["content"] = content if content else ""
             m["tool_calls"] = msg["tool_calls"]
         elif msg.get("role") == "tool":
             m["content"] = content or ""
             m["tool_call_id"] = msg.get("tool_call_id", "")
-            if "name" in msg:
+            # Note: 'name' field in tool messages can cause issues with some providers
+            # Only include if present and non-empty
+            if msg.get("name"):
                 m["name"] = msg["name"]
         else:
             m["content"] = content or ""
