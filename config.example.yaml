@@ -1,26 +1,36 @@
-# XiaClaw 配置文件示例
+# XiaClaw 配置文件
 # 复制为 config.yaml 并修改
 
-# 核心配置
 debug: false
 
-# 安全配置
 security:
-  level: strict  # strict, normal, relaxed
-  require_confirm_dangerous: true
+  level: strict
 
-# 消息通道
-channels:
-  - feishu
-  - telegram
+# 多Provider配置
+providers:
+  default:
+    type: openai
+    api_key: ${OPENAI_API_KEY}
+    base_url: https://ai.ltcraft.cn:12000/v1
+    models:
+      - claude-opus-4-6
+    default_model: claude-opus-4-6
+  backup:
+    type: openai
+    api_key: ${BACKUP_API_KEY}
+    base_url: https://api.minimax.chat/v1
+    models:
+      - MiniMax-M2.5
+    default_model: MiniMax-M2.5
 
-# 模型配置
-model:
-  default: minimax/MiniMax-M2.5
-  api_key: ${OPENAI_API_KEY}
-  base_url: https://api.minimax.chat/v1
+active_provider: default
 
-# 启用的工具
+# Session配置
+session:
+  max_context_tokens: 8000
+  compaction_threshold: 6000
+
+# 工具
 tools:
   enabled:
     - read
@@ -29,18 +39,10 @@ tools:
     - exec
     - web_search
     - web_fetch
-  disabled: []
+    - memory_search
+    - memory_get
 
-# 飞书配置
+# 飞书
 feishu:
   app_id: ${FEISHU_APP_ID}
   app_secret: ${FEISHU_APP_SECRET}
-
-# Telegram配置
-telegram:
-  bot_token: ${TELEGRAM_BOT_TOKEN}
-
-# 日志
-logging:
-  level: INFO
-  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"

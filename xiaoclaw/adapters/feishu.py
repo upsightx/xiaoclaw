@@ -4,6 +4,7 @@ Feishu Adapter - 飞书集成
 """
 
 import os
+import json
 import logging
 from typing import Dict, Any, Optional
 
