@@ -1,48 +1,41 @@
 # xiaoclaw 配置文件
-# 复制为 config.yaml 并修改
+# 环境变量优先级高于此文件
 
-debug: false
-
-security:
-  level: strict
-
-# 多Provider配置
-providers:
-  default:
-    type: openai
-    api_key: ${OPENAI_API_KEY}
-    base_url: https://ai.ltcraft.cn:12000/v1
-    models:
-      - claude-opus-4-6
-    default_model: claude-opus-4-6
-  backup:
-    type: openai
-    api_key: ${BACKUP_API_KEY}
-    base_url: https://api.minimax.chat/v1
-    models:
-      - MiniMax-M2.5
-    default_model: MiniMax-M2.5
-
-active_provider: default
-
-# Session配置
-session:
+agent:
+  debug: false
+  security: strict
+  workspace: "."
   max_context_tokens: 8000
   compaction_threshold: 6000
 
-# 工具
-tools:
-  enabled:
-    - read
-    - write
-    - edit
-    - exec
-    - web_search
-    - web_fetch
-    - memory_search
-    - memory_get
+# Provider配置
+active_provider: default
 
-# 飞书
-feishu:
-  app_id: ${FEISHU_APP_ID}
-  app_secret: ${FEISHU_APP_SECRET}
+providers:
+  default:
+    type: openai
+    api_key: "${OPENAI_API_KEY}"
+    base_url: "https://ai.ltcraft.cn:12000/v1"
+    default_model: "claude-opus-4-6"
+    models:
+      - claude-opus-4-6
+
+  minimax:
+    type: openai
+    api_key: "${MINIMAX_API_KEY}"
+    base_url: "https://api.minimax.chat/v1"
+    default_model: "MiniMax-M2.5"
+    models:
+      - MiniMax-M2.5
+
+  openai:
+    type: openai
+    api_key: "${OPENAI_API_KEY}"
+    base_url: "https://api.openai.com/v1"
+    default_model: "gpt-4o"
+    models:
+      - gpt-4o
+      - gpt-4o-mini
+
+# Skills目录
+skills_dir: "./skills"
