@@ -1,0 +1,9 @@
+# Core
+aiohttp>=3.9.0
+websockets>=12.0
+
+# Optional: OpenAI SDK for LLM
+openai>=1.0.0
+
+# Optional: For better logging
+colorlog>=6.8.0
