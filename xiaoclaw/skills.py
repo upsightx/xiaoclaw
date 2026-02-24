@@ -259,6 +259,16 @@ def register_builtin_skills(registry: SkillRegistry):
     registry.register(create_skill("datetime", "Date/time utilities", {"get_time": get_time}))
     registry.register(create_skill("python", "Safe Python eval", {"safe_eval": safe_eval}))
 
+    # Translation skill (via LLM — returns prompt for LLM to translate)
+    def translate(text: str, target_lang: str = "en", **kw) -> str:
+        """Translate text. Returns instruction for LLM to process."""
+        lang_map = {"en": "English", "zh": "中文", "ja": "日本語", "ko": "한국어",
+                    "fr": "Français", "de": "Deutsch", "es": "Español", "ru": "Русский"}
+        lang_name = lang_map.get(target_lang, target_lang)
+        return f"[Translate to {lang_name}]: {text}"
+
+    registry.register(create_skill("translate", "Translation via LLM", {"translate": translate}))
+
 
 def test_skills():
     """Quick self-test."""
