@@ -85,7 +85,7 @@ xiaoclaw
 | `OPENAI_BASE_URL` | API地址 | `https://ai.ltcraft.cn:12000/v1` |
 | `XIAOCLAW_MODEL` | 模型 | `claude-opus-4-6` |
 | `XIAOCLAW_SECURITY` | 安全级别 | `strict` |
-| `XIAOCLAW_MAX_TOKENS` | 最大上下文token | `8000` |
+| `XIAOCLAW_MAX_TOKENS` | 最大上下文token | `128000` |
 | `XIAOCLAW_LANG` | UI语言 (zh/en) | `zh` |
 
 ### 多Provider配置
