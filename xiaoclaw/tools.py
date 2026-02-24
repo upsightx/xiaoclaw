@@ -35,6 +35,7 @@ class ToolRegistry:
         self.tools: Dict[str, Dict] = {}
         self.security = security
         self.memory = memory
+        self._disabled: set = set()  # disabled tool names
         for n, f, d in [
             ("read", self._read, "Read file"), ("write", self._write, "Write file"),
             ("edit", self._edit, "Edit file"), ("exec", self._exec, "Run command"),
@@ -46,9 +47,17 @@ class ToolRegistry:
             self.tools[n] = {"func": f, "description": d}
 
     def get(self, name: str): return self.tools.get(name)
-    def list_names(self) -> List[str]: return list(self.tools.keys())
+    def list_names(self) -> List[str]: return [n for n in self.tools if n not in self._disabled]
+
+    def disable_tool(self, name: str):
+        self._disabled.add(name)
+
+    def enable_tool(self, name: str):
+        self._disabled.discard(name)
 
     def call(self, name: str, args: Dict) -> str:
+        if name in self._disabled:
+            return f"Error: tool '{name}' is disabled"
         tool = self.tools.get(name)
         if not tool:
             return f"Error: unknown tool '{name}'. Available: {', '.join(self.list_names())}"

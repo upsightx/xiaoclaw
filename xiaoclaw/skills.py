@@ -217,7 +217,6 @@ def register_builtin_skills(registry: SkillRegistry):
         """Get current date/time, optionally in a specific timezone."""
         from datetime import datetime, timezone as tz, timedelta
         if timezone:
-            # Simple offset parsing: UTC+8, UTC-5, etc.
             m = re.match(r'UTC([+-]\d+)', timezone.upper())
             if m:
                 offset = int(m.group(1))
@@ -226,8 +225,39 @@ def register_builtin_skills(registry: SkillRegistry):
         from datetime import datetime as dt
         return dt.now().strftime("%Y-%m-%d %H:%M:%S (local)")
 
+    def safe_eval(code: str, **kw) -> str:
+        """Execute simple Python expressions in a restricted sandbox."""
+        import ast
+        try:
+            tree = ast.parse(code, mode='eval')
+            # Only allow safe node types
+            SAFE = (ast.Expression, ast.BinOp, ast.UnaryOp, ast.Num, ast.Str,
+                    ast.List, ast.Tuple, ast.Dict, ast.Set, ast.Constant,
+                    ast.Add, ast.Sub, ast.Mult, ast.Div, ast.Mod, ast.Pow,
+                    ast.FloorDiv, ast.USub, ast.UAdd, ast.Compare,
+                    ast.Eq, ast.NotEq, ast.Lt, ast.LtE, ast.Gt, ast.GtE,
+                    ast.BoolOp, ast.And, ast.Or, ast.Not, ast.IfExp,
+                    ast.Call, ast.Name, ast.Attribute, ast.Subscript, ast.Index, ast.Slice)
+            for node in ast.walk(tree):
+                if not isinstance(node, SAFE):
+                    return f"Error: unsafe expression ({type(node).__name__})"
+            # Restricted builtins
+            safe_builtins = {"abs": abs, "len": len, "min": min, "max": max,
+                             "sum": sum, "round": round, "sorted": sorted,
+                             "int": int, "float": float, "str": str, "bool": bool,
+                             "list": list, "dict": dict, "set": set, "tuple": tuple,
+                             "range": range, "enumerate": enumerate, "zip": zip,
+                             "True": True, "False": False, "None": None}
+            result = eval(compile(tree, '<expr>', 'eval'), {"__builtins__": {}}, safe_builtins)
+            return str(result)
+        except SyntaxError:
+            return "Error: invalid syntax"
+        except Exception as e:
+            return f"Error: {e}"
+
     registry.register(create_skill("calculator", "Basic calculator", {"calc": calc}))
     registry.register(create_skill("datetime", "Date/time utilities", {"get_time": get_time}))
+    registry.register(create_skill("python", "Safe Python eval", {"safe_eval": safe_eval}))
 
 
 def test_skills():

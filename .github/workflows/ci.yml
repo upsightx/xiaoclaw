@@ -1,0 +1,48 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.10", "3.11", "3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install pytest pytest-asyncio
+
+      - name: Run unit tests
+        run: |
+          python -c "
+          from xiaoclaw.providers import test_providers; test_providers()
+          from xiaoclaw.session import test_session; test_session()
+          from xiaoclaw.memory import test_memory; test_memory()
+          from xiaoclaw.skills import test_skills; test_skills()
+          print('All unit tests passed!')
+          "
+
+      - name: Import check
+        run: |
+          python -c "from xiaoclaw import XiaClaw, VERSION; print(f'xiaoclaw v{VERSION} imported OK')"
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build Docker image
+        run: docker build -t xiaoclaw .

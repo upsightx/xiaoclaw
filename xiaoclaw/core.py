@@ -356,17 +356,26 @@ class XiaClaw:
                                          for tc in choice.message.tool_calls]}
                 self.session.add_message(**tc_msg)
 
-                for tc in choice.message.tool_calls:
+                # Execute tool calls (parallel if multiple)
+                async def _run_tool(tc):
                     name = tc.function.name
                     try: args = json.loads(tc.function.arguments)
                     except json.JSONDecodeError: args = {}
-
                     await self.hooks.fire("before_tool_call", tool=name, args=args)
                     self.security.log_tool_call(name, args)
                     result = self.tools.call(name, args)
                     self.stats.record_tool()
                     await self.hooks.fire("after_tool_call", tool=name, args=args, result=result)
                     logger.info(f"Tool: {name}({list(args.keys())}) → {len(result)} chars")
+                    return tc, name, args, result
+
+                tool_calls = choice.message.tool_calls
+                if len(tool_calls) > 1:
+                    results = await asyncio.gather(*[_run_tool(tc) for tc in tool_calls])
+                else:
+                    results = [await _run_tool(tool_calls[0])]
+
+                for tc, name, args, result in results:
                     self.session.add_message("tool", result, tool_call_id=tc.id, name=name)
                     if stream:
                         yield f"\n  ⚙ {name}({', '.join(f'{k}=' for k in args)})\n"
