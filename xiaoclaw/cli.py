@@ -8,6 +8,10 @@ from .core import XiaClaw, XiaClawConfig, VERSION
 
 
 async def main():
+    # Quick flags
+    if "--version" in sys.argv or "-V" in sys.argv:
+        print(f"xiaoclaw v{VERSION}"); return
+
     # Support --config path
     config_path = None
     for i, arg in enumerate(sys.argv):
@@ -47,6 +51,8 @@ async def main():
         "/clear": lambda: (setattr(claw, 'session', claw.session_mgr.new_session()), print("  New session")),
         "/c": lambda: (setattr(claw, 'session', claw.session_mgr.new_session()), print("  New session")),
         "/stats": lambda: print(f"  {claw.stats.summary()}"),
+        "/version": lambda: print(f"  xiaoclaw v{VERSION}"),
+        "/v": lambda: print(f"  xiaoclaw v{VERSION}"),
     }
     ALIASES = {"/q": "/quit", "/h": "/help", "/s": "/sessions"}
 
@@ -130,6 +136,10 @@ async def main():
                     print("  Levels: DEBUG INFO WARNING ERROR")
             else:
                 print(f"  Current: {logging.getLogger().level}")
+            continue
+        if cmd == "/reload":
+            ok = claw.reload_config(config_path or "config.yaml")
+            print(f"  Config {'reloaded' if ok else 'reload failed'}")
             continue
         print(f"\n🐾 xiaoclaw: ", end="", flush=True)
         async for chunk in claw.handle_message_stream(user_input):
