@@ -1,4 +1,4 @@
-"""XiaClaw Provider System - Multi-provider LLM management"""
+"""xiaoclaw Provider System - Multi-provider LLM management"""
 import os
 import logging
 from pathlib import Path
@@ -17,7 +17,7 @@ try:
 except ImportError:
     HAS_OPENAI = False
 
-logger = logging.getLogger("XiaClaw.Providers")
+logger = logging.getLogger("xiaoclaw.Providers")
 
 
 @dataclass
