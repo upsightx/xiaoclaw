@@ -14,6 +14,7 @@ from .providers import ProviderManager, ProviderConfig
 from .session import Session, SessionManager, count_messages_tokens
 from .memory import MemoryManager
 from .skills import SkillRegistry, register_builtin_skills
+from .web import web_search as _web_search, web_fetch as _web_fetch
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(name)s] %(levelname)s %(message)s')
 logger = logging.getLogger("xiaoclaw")
@@ -44,6 +45,37 @@ class XiaClawConfig:
             api_key=os.getenv("OPENAI_API_KEY", ""),
             base_url=os.getenv("OPENAI_BASE_URL", "https://ai.ltcraft.cn:12000/v1"),
             default_model=os.getenv("XIAOCLAW_MODEL", "claude-opus-4-6"),
+        )
+
+    @classmethod
+    def from_yaml(cls, path: str = "config.yaml") -> "XiaClawConfig":
+        """Load from YAML file, env vars override."""
+        try:
+            import yaml
+            with open(path) as f:
+                data = yaml.safe_load(f) or {}
+        except Exception:
+            return cls.from_env()
+
+        def _resolve(val):
+            """Resolve ${ENV_VAR} references."""
+            if isinstance(val, str) and val.startswith("${") and val.endswith("}"):
+                return os.getenv(val[2:-1], "")
+            return val
+
+        cfg = data.get("agent", data)
+        providers = data.get("providers", {})
+        default_provider = providers.get(data.get("active_provider", "default"), {})
+
+        return cls(
+            debug=cfg.get("debug", os.getenv("XIAOCLAW_DEBUG", "false").lower() == "true"),
+            security_level=cfg.get("security", os.getenv("XIAOCLAW_SECURITY", "strict")),
+            workspace=cfg.get("workspace", os.getenv("XIAOCLAW_WORKSPACE", ".")),
+            max_context_tokens=cfg.get("max_context_tokens", int(os.getenv("XIAOCLAW_MAX_TOKENS", "8000"))),
+            compaction_threshold=cfg.get("compaction_threshold", int(os.getenv("XIAOCLAW_COMPACT_THRESHOLD", "6000"))),
+            api_key=_resolve(default_provider.get("api_key", os.getenv("OPENAI_API_KEY", ""))),
+            base_url=default_provider.get("base_url", os.getenv("OPENAI_BASE_URL", "https://ai.ltcraft.cn:12000/v1")),
+            default_model=default_provider.get("default_model", os.getenv("XIAOCLAW_MODEL", "claude-opus-4-6")),
         )
 
 # ─── Security ─────────────────────────────────────────
@@ -109,8 +141,8 @@ class ToolRegistry:
         for n, f, d in [
             ("read", self._read, "Read file"), ("write", self._write, "Write file"),
             ("edit", self._edit, "Edit file"), ("exec", self._exec, "Run command"),
-            ("web_search", lambda **kw: f"[stub] search: {kw.get('query','')}", "Search web"),
-            ("web_fetch", lambda **kw: f"[stub] fetch: {kw.get('url','')}", "Fetch URL"),
+            ("web_search", lambda **kw: _web_search(**kw), "Search web"),
+            ("web_fetch", lambda **kw: _web_fetch(**kw), "Fetch URL"),
             ("memory_search", self._memory_search, "Search memory"),
             ("memory_get", self._memory_get, "Get memory"),
         ]:
@@ -262,8 +294,88 @@ class XiaClaw:
         self.session.save()
         logger.info(f"Compacted to {len(self.session.messages)} messages")
 
+    async def _agent_loop(self, sys_prompt: str, stream: bool = False):
+        """Core agent loop: LLM → tool calls → repeat. Yields chunks if stream=True."""
+        max_rounds = 10
+        client = self.providers.active.client
+        model = self.providers.active.current_model
+
+        for _ in range(max_rounds):
+            ctx = self.session.get_context_window(self.config.max_context_tokens)
+            all_msgs = [{"role": "system", "content": sys_prompt}] + ctx
+
+            try:
+                if stream:
+                    # Non-streaming call for tool-calling rounds, stream only final text
+                    resp = await client.chat.completions.create(
+                        model=model, messages=all_msgs,
+                        tools=self.tools.openai_functions(), max_tokens=2000,
+                    )
+                else:
+                    resp = await client.chat.completions.create(
+                        model=model, messages=all_msgs,
+                        tools=self.tools.openai_functions(), max_tokens=2000,
+                    )
+            except Exception as e:
+                logger.error(f"LLM error: {e}")
+                yield f"[LLM Error: {e}]"; return
+
+            choice = resp.choices[0]
+
+            if choice.message.tool_calls:
+                tc_msg = {"role": "assistant", "content": choice.message.content or "",
+                          "tool_calls": [{"id": tc.id, "type": "function",
+                                          "function": {"name": tc.function.name, "arguments": tc.function.arguments}}
+                                         for tc in choice.message.tool_calls]}
+                self.session.add_message(**tc_msg)
+
+                for tc in choice.message.tool_calls:
+                    name = tc.function.name
+                    try: args = json.loads(tc.function.arguments)
+                    except json.JSONDecodeError: args = {}
+
+                    await self.hooks.fire("before_tool_call", tool=name, args=args)
+                    result = self.tools.call(name, args)
+                    await self.hooks.fire("after_tool_call", tool=name, args=args, result=result)
+                    logger.info(f"Tool: {name}({list(args.keys())}) → {len(result)} chars")
+                    self.session.add_message("tool", result, tool_call_id=tc.id, name=name)
+                    if stream:
+                        yield f"\n  ⚙ {name}({', '.join(f'{k}=' for k in args)})\n"
+                continue
+
+            # Final response — stream it if requested
+            if stream:
+                # Re-do as streaming call (no tools this round)
+                ctx = self.session.get_context_window(self.config.max_context_tokens)
+                all_msgs = [{"role": "system", "content": sys_prompt}] + ctx
+                full = ""
+                try:
+                    async for chunk in await client.chat.completions.create(
+                        model=model, messages=all_msgs, max_tokens=2000, stream=True,
+                    ):
+                        delta = chunk.choices[0].delta.content or "" if chunk.choices else ""
+                        if delta:
+                            full += delta
+                            yield delta
+                except Exception as e:
+                    logger.error(f"Stream error: {e}")
+                    full = choice.message.content or ""
+                    yield full
+                text = re.sub(r'<think>.*?</think>\s*', '', full, flags=re.DOTALL).strip()
+                if text:
+                    self.session.add_message("assistant", text)
+                return
+
+            text = choice.message.content or ""
+            text = re.sub(r'<think>.*?</think>\s*', '', text, flags=re.DOTALL).strip()
+            if text:
+                self.session.add_message("assistant", text)
+            yield text; return
+
+        yield "[Agent loop exceeded max rounds]"
+
     async def handle_message(self, message: str) -> str:
-        """Process a user message through the agent loop with tool calling."""
+        """Process a user message, return full response."""
         await self.hooks.fire("message_received", message=message)
         self.skills.activate_for_message(message)
         self.session.add_message("user", message)
@@ -272,60 +384,23 @@ class XiaClaw:
         if not (self.providers.active and self.providers.active.ready):
             return self._fallback(message)
 
-        sys_prompt = self._system_prompt()
-        max_rounds = 10  # prevent infinite loops
+        parts = []
+        async for chunk in self._agent_loop(self._system_prompt(), stream=False):
+            parts.append(chunk)
+        return "".join(parts)
 
-        for _ in range(max_rounds):
-            ctx = self.session.get_context_window(self.config.max_context_tokens)
-            all_msgs = [{"role": "system", "content": sys_prompt}] + ctx
+    async def handle_message_stream(self, message: str):
+        """Process a user message, yield streaming chunks."""
+        await self.hooks.fire("message_received", message=message)
+        self.skills.activate_for_message(message)
+        self.session.add_message("user", message)
+        await self._compact()
 
-            try:
-                resp = await self.providers.active.client.chat.completions.create(
-                    model=self.providers.active.current_model,
-                    messages=all_msgs,
-                    tools=self.tools.openai_functions(),
-                    max_tokens=2000,
-                )
-            except Exception as e:
-                logger.error(f"LLM error: {e}")
-                return f"[LLM Error: {e}]"
+        if not (self.providers.active and self.providers.active.ready):
+            yield self._fallback(message); return
 
-            choice = resp.choices[0]
-
-            # If model wants to call tools
-            if choice.message.tool_calls:
-                # Store assistant message with tool_calls
-                tc_msg = {"role": "assistant", "content": choice.message.content or "",
-                          "tool_calls": [{"id": tc.id, "type": "function",
-                                          "function": {"name": tc.function.name, "arguments": tc.function.arguments}}
-                                         for tc in choice.message.tool_calls]}
-                self.session.add_message(**tc_msg)
-
-                # Execute each tool call
-                for tc in choice.message.tool_calls:
-                    name = tc.function.name
-                    try:
-                        args = json.loads(tc.function.arguments)
-                    except json.JSONDecodeError:
-                        args = {}
-
-                    await self.hooks.fire("before_tool_call", tool=name, args=args)
-                    result = self.tools.call(name, args)
-                    await self.hooks.fire("after_tool_call", tool=name, args=args, result=result)
-
-                    logger.info(f"Tool: {name}({list(args.keys())}) → {len(result)} chars")
-                    self.session.add_message("tool", result, tool_call_id=tc.id, name=name)
-
-                continue  # next round — let LLM see tool results
-
-            # No tool calls — final text response
-            text = choice.message.content or ""
-            text = re.sub(r'<think>.*?</think>\s*', '', text, flags=re.DOTALL).strip()
-            if text:
-                self.session.add_message("assistant", text)
-            return text
-
-        return "[Agent loop exceeded max rounds]"
+        async for chunk in self._agent_loop(self._system_prompt(), stream=True):
+            yield chunk
 
     def _fallback(self, message: str) -> str:
         if "你好" in message or "hello" in message.lower():
@@ -338,7 +413,13 @@ class XiaClaw:
 
 async def main():
     import sys
-    config = XiaClawConfig.from_env()
+    # Support --config path
+    config_path = None
+    for i, arg in enumerate(sys.argv):
+        if arg == "--config" and i + 1 < len(sys.argv):
+            config_path = sys.argv[i + 1]
+
+    config = XiaClawConfig.from_yaml(config_path) if config_path else XiaClawConfig.from_env()
     claw = XiaClaw(config)
     p = claw.providers.active
     print(f"\n  xiaoclaw v{VERSION} | {p.current_model if p else 'no LLM'} | session={claw.session.session_id}\n")
@@ -349,6 +430,7 @@ async def main():
         from .session import test_session; test_session()
         from .memory import test_memory; test_memory()
         from .skills import test_skills; test_skills()
+        from .web import test_web; test_web()
         for msg in ["你好", "工具列表", "1+1等于几？"]:
             r = await claw.handle_message(msg)
             print(f"  > {msg}\n  < {r[:200]}\n")
@@ -377,7 +459,10 @@ async def main():
         if cmd == "/sessions":
             for s in claw.session_mgr.list_sessions(): print(f"  {s['session_id']} ({s['size']}B)")
             continue
-        print(f"\n🐾 xiaoclaw: {await claw.handle_message(user_input)}")
+        print(f"\n🐾 xiaoclaw: ", end="", flush=True)
+        async for chunk in claw.handle_message_stream(user_input):
+            print(chunk, end="", flush=True)
+        print()  # newline after stream
 
 if __name__ == "__main__":
     asyncio.run(main())
