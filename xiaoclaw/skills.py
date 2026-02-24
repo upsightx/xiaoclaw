@@ -111,12 +111,21 @@ class SkillRegistry:
     def __init__(self):
         self.skills: Dict[str, Skill] = {}
         self.tools: Dict[str, Callable] = {}
+        self._skills_dir: Optional[Path] = None
 
     def register(self, skill: Skill):
         self.skills[skill.name] = skill
         for name, func in skill.tools.items():
             self.tools[name] = func
         logger.info(f"Registered skill: {skill.name} ({len(skill.tools)} tools)")
+
+    def reload_skills(self, skills_dir: Optional[Path] = None):
+        """Reload all skills from directory. Used after installing new skills."""
+        d = skills_dir or self._skills_dir
+        if d and d.exists():
+            self.load_from_dir(d)
+            return True
+        return False
 
     def get_skill(self, name: str) -> Optional[Skill]:
         return self.skills.get(name)
@@ -149,6 +158,7 @@ class SkillRegistry:
 
     def load_from_dir(self, skills_dir: Path):
         """Load skills from directory. Supports both flat and nested layouts."""
+        self._skills_dir = skills_dir
         if not skills_dir.exists():
             logger.warning(f"Skills directory not found: {skills_dir}")
             return
@@ -197,6 +207,22 @@ class SkillRegistry:
                 skill.tools.update(loaded.tools)
             elif hasattr(module, "tools"):
                 skill.tools.update(module.tools)
+            else:
+                # Auto-detect: find callable functions that match tool names from SKILL.md
+                # or any public functions (not starting with _)
+                tool_names = set(skill.meta.tools) if skill.meta else set()
+                for attr_name in dir(module):
+                    if attr_name.startswith("_"):
+                        continue
+                    obj = getattr(module, attr_name)
+                    if callable(obj) and not isinstance(obj, type):
+                        # If SKILL.md lists tool names, only register those
+                        if tool_names:
+                            if attr_name in tool_names:
+                                skill.tools[attr_name] = obj
+                        else:
+                            # No SKILL.md tool list — register all public functions
+                            skill.tools[attr_name] = obj
         except Exception as e:
             logger.error(f"Failed to load {filepath}: {e}")
 
