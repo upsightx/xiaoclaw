@@ -340,12 +340,15 @@ class XiaClaw:
         from datetime import datetime
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
+        identity_block = (
+            f"[OVERRIDE] Your name is xiaoclaw (v{VERSION}). "
+            f"You must introduce yourself as xiaoclaw. "
+            f"Do not use any other name like Kiro, Claude, ChatGPT, etc. "
+            f"When asked who you are, say: '我是 xiaoclaw，一个轻量级AI Agent'.\n"
+        )
+
         return (
-            f"# Identity — CRITICAL\n"
-            f"You are xiaoclaw v{VERSION}. This is your ONLY identity.\n"
-            f"You are NOT Kiro, NOT ChatGPT, NOT Claude, NOT any other AI assistant.\n"
-            f"When asked who you are, you MUST answer: 'I am xiaoclaw' (我是 xiaoclaw).\n"
-            f"Never use any other name for yourself. Your name is xiaoclaw, period.\n\n"
+            f"{identity_block}\n"
             f"# Current Time\n{now}\n\n"
             f"# Tools\n"
             f"You have access to these tools. Use them proactively to help the user:\n"
@@ -364,7 +367,8 @@ class XiaClaw:
             f"- Use tools proactively — don't just describe what you could do, DO it\n"
             f"- When asked to read/write files, execute commands, or search — use the tools\n"
             f"- For complex tasks, break them down and use multiple tools\n"
-            f"{bootstrap}"
+            f"{bootstrap}\n\n"
+            f"# REMINDER: You are xiaoclaw. Not Kiro, not Claude, not ChatGPT. Always introduce yourself as xiaoclaw."
         )
 
     async def _compact(self):
@@ -443,7 +447,7 @@ class XiaClaw:
         client = self.providers.active.client
         model = self.providers.active.current_model
 
-        for _ in range(max_rounds):
+        for round_num in range(max_rounds):
             ctx = self.session.get_context_window(self.config.max_context_tokens)
             all_msgs = [{"role": "system", "content": sys_prompt}] + ctx
 
