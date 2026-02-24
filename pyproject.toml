@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "xiaoclaw"
-version = "0.3.0"
+version = "0.3.1"
 description = "Lightweight AI Agent compatible with OpenClaw ecosystem"
 readme = "README.md"
 license = {text = "MIT"}
