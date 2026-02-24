@@ -1,9 +1,10 @@
 FROM python:3.12-slim
 
 WORKDIR /app
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-RUN pip install --no-cache-dir pytest pytest-asyncio pytest-cov
+COPY requirements.txt pyproject.toml ./
+COPY xiaoclaw/ xiaoclaw/
+COPY skills/ skills/
+RUN pip install --no-cache-dir -r requirements.txt && pip install --no-cache-dir -e .
 COPY . .
 
 ENV PYTHONUNBUFFERED=1
