@@ -17,8 +17,10 @@ from .tools import ToolRegistry, TOOL_DEFS
 from .plugins import PluginManager
 from .utils import SecurityManager, RateLimiter, TokenStats, HookManager
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(name)s] %(levelname)s %(message)s')
+logging.basicConfig(level=logging.WARNING, format='%(message)s')
 logger = logging.getLogger("xiaoclaw")
+# Suppress noisy httpx logs
+logging.getLogger("httpx").setLevel(logging.WARNING)
 
 VERSION = "0.3.1"
 
@@ -32,7 +34,7 @@ class XiaClawConfig:
     max_context_tokens: int = 8000
     compaction_threshold: int = 6000
     default_model: str = "claude-opus-4-6"
-    api_key: str = ""
+    api_key: str = "sk-iHus2xPomk0gCRPcqhxbLOw8zffMUeg7pryj1qnO5Cb698pW"
     base_url: str = "https://ai.ltcraft.cn:12000/v1"
 
     @classmethod
@@ -43,7 +45,7 @@ class XiaClawConfig:
             workspace=os.getenv("XIAOCLAW_WORKSPACE", "."),
             max_context_tokens=int(os.getenv("XIAOCLAW_MAX_TOKENS", "8000")),
             compaction_threshold=int(os.getenv("XIAOCLAW_COMPACT_THRESHOLD", "6000")),
-            api_key=os.getenv("OPENAI_API_KEY", ""),
+            api_key=os.getenv("OPENAI_API_KEY", "sk-iHus2xPomk0gCRPcqhxbLOw8zffMUeg7pryj1qnO5Cb698pW"),
             base_url=os.getenv("OPENAI_BASE_URL", "https://ai.ltcraft.cn:12000/v1"),
             default_model=os.getenv("XIAOCLAW_MODEL", "claude-opus-4-6"),
         )
@@ -189,9 +191,15 @@ class XiaClaw:
         if self.bootstrap_context:
             bootstrap = f"\n\n## Workspace Context\n{self.bootstrap_context[:3000]}"
         return (
-            f"你是 xiaoclaw v{VERSION}，一个兼容OpenClaw生态的轻量级AI Agent。\n"
-            f"工具: {tool_list}{skill_info}\n"
-            f"保持简洁、专业、高效。{bootstrap}"
+            f"# 身份\n"
+            f"你是 xiaoclaw，版本 {VERSION}。你是一个轻量级AI Agent，兼容OpenClaw生态。\n"
+            f"重要：你的名字是 xiaoclaw。你不是 Kiro、不是 ChatGPT、不是 Claude、不是任何其他AI。\n"
+            f"当用户问你是谁时，回答「我是 xiaoclaw」。\n\n"
+            f"# 能力\n"
+            f"你可以使用以下工具: {tool_list}\n"
+            f"你能读写文件、执行命令、搜索网页、管理记忆和会话。{skill_info}\n\n"
+            f"# 风格\n"
+            f"简洁、专业、高效。默认用中文回复。{bootstrap}"
         )
 
     async def _compact(self):
@@ -314,7 +322,9 @@ class XiaClaw:
                 for tc, name, args, result in results:
                     self.session.add_message("tool", result, tool_call_id=tc.id, name=name)
                     if stream:
-                        yield f"\n  ⚙ {name}({', '.join(f'{k}=' for k in args)})\n"
+                        # Show tool name with key args, compact format
+                        arg_preview = ', '.join(f'{k}={str(v)[:30]}' for k,v in args.items() if k != 'content')
+                        yield f"\n  ⚙ {name}({arg_preview})\n"
                 continue
 
             if stream:
