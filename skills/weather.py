@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Weather Skill for XiaClaw"""
+"""Weather Skill for xiaoclaw"""
 
 def get_weather(location: str = "Shanghai", **kwargs) -> str:
     return f"🌤️ {location}: 晴, 22°C, 湿度65%"
