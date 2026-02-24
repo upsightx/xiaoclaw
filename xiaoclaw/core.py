@@ -20,7 +20,7 @@ from .utils import SecurityManager, RateLimiter, TokenStats, HookManager
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(name)s] %(levelname)s %(message)s')
 logger = logging.getLogger("xiaoclaw")
 
-VERSION = "0.3.0"
+VERSION = "0.3.1"
 
 # ─── Config ───────────────────────────────────────────
 
