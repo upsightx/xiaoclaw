@@ -82,6 +82,36 @@ class XiaClawConfig:
         )
 
 
+# ─── Friendly Tool Display ────────────────────────
+
+def _friendly_tool_display(name: str, args: dict) -> str:
+    """Generate a friendly display string for tool calls."""
+    display_map = {
+        "clawhub_search": lambda a: f'⚙ 搜索ClawHub: "{a.get("query", "")}"...',
+        "clawhub_install": lambda a: f'⚙ 安装skill: {a.get("slug", "")}...',
+        "clawhub_list": lambda a: "⚙ 列出已安装skill...",
+        "create_skill": lambda a: f'⚙ 创建skill: {a.get("name", "")}...',
+        "read": lambda a: f'⚙ 读取文件: {a.get("file_path", a.get("path", ""))}...',
+        "write": lambda a: f'⚙ 写入文件: {a.get("file_path", a.get("path", ""))}...',
+        "edit": lambda a: f'⚙ 编辑文件: {a.get("file_path", a.get("path", ""))}...',
+        "exec": lambda a: f'⚙ 执行命令: {a.get("command", "")[:60]}...',
+        "web_search": lambda a: f'⚙ 搜索网页: "{a.get("query", "")}"...',
+        "web_fetch": lambda a: f'⚙ 获取网页: {a.get("url", "")[:60]}...',
+        "memory_search": lambda a: f'⚙ 搜索记忆: "{a.get("query", "")}"...',
+        "memory_save": lambda a: "⚙ 保存记忆...",
+        "list_dir": lambda a: f'⚙ 列出目录: {a.get("path", ".")}...',
+        "find_files": lambda a: f'⚙ 查找文件: {a.get("pattern", "")}...',
+        "grep": lambda a: f'⚙ 搜索内容: "{a.get("pattern", "")}"...',
+    }
+    formatter = display_map.get(name)
+    if formatter:
+        try:
+            return formatter(args)
+        except Exception:
+            pass
+    return f"⚙ {name}..."
+
+
 # ─── xiaoclaw Core ────────────────────────────────────
 
 class XiaClaw:
@@ -92,7 +122,7 @@ class XiaClaw:
         self.rate_limiter = RateLimiter()
         self.stats = TokenStats()
         self.memory = MemoryManager(self.workspace)
-        self.tools = ToolRegistry(self.security, memory=self.memory)
+        self.tools = ToolRegistry(self.security, memory=self.memory, skills_registry=None)  # set after skills init
         self.hooks = HookManager()
         self.session_mgr = SessionManager(self.workspace / ".xiaoclaw" / "sessions")
         self.session = self.session_mgr.new_session()
@@ -120,6 +150,10 @@ class XiaClaw:
         if skills_dir.exists():
             self.skills.load_from_dir(skills_dir)
 
+        # Wire up skills_registry to tools for clawhub integration
+        self.tools.skills_registry = self.skills
+        self.tools.set_skills_dir(skills_dir)
+
         # Register skill tools into the tool registry so LLM can call them
         self._register_skill_tools()
 
@@ -139,6 +173,8 @@ class XiaClaw:
 
     def _register_skill_tools(self):
         """Register all skill tools into the tool registry so LLM can call them via function calling."""
+        import inspect
+
         skill_tool_params = {
             "calc": {
                 "type": "object",
@@ -170,12 +206,53 @@ class XiaClaw:
             "safe_eval": "Evaluate a Python expression safely",
             "translate": "Translate text to another language",
         }
+
+        def _auto_params(func):
+            """Auto-generate parameter schema from function signature."""
+            try:
+                sig = inspect.signature(func)
+                props = {}
+                required = []
+                for pname, param in sig.parameters.items():
+                    if pname in ("self", "kw", "kwargs"):
+                        continue
+                    if pname.startswith("_"):
+                        continue
+                    # Determine type from annotation or default
+                    ptype = "string"
+                    if param.annotation != inspect.Parameter.empty:
+                        ann = param.annotation
+                        if ann == int:
+                            ptype = "integer"
+                        elif ann == float:
+                            ptype = "number"
+                        elif ann == bool:
+                            ptype = "boolean"
+                    elif param.default != inspect.Parameter.empty:
+                        if isinstance(param.default, int):
+                            ptype = "integer"
+                        elif isinstance(param.default, float):
+                            ptype = "number"
+                        elif isinstance(param.default, bool):
+                            ptype = "boolean"
+                    props[pname] = {"type": ptype, "description": f"Parameter: {pname}"}
+                    if param.default == inspect.Parameter.empty:
+                        required.append(pname)
+                return {"type": "object", "properties": props, "required": required}
+            except Exception:
+                return {"type": "object", "properties": {}, "required": []}
+
+        def _auto_desc(func, tool_name):
+            """Auto-generate description from docstring."""
+            doc = getattr(func, "__doc__", None)
+            if doc:
+                return doc.strip().split("\n")[0][:200]
+            return f"Skill tool: {tool_name}"
+
         for tool_name, func in self.skills.tools.items():
             if tool_name not in self.tools.tools:
-                params = skill_tool_params.get(tool_name, {
-                    "type": "object", "properties": {}, "required": []
-                })
-                desc = skill_tool_descs.get(tool_name, f"Skill tool: {tool_name}")
+                params = skill_tool_params.get(tool_name, _auto_params(func))
+                desc = skill_tool_descs.get(tool_name, _auto_desc(func, tool_name))
                 self.tools.register_tool(tool_name, func, desc, params)
 
         # Register sub-agent tool
@@ -341,10 +418,12 @@ class XiaClaw:
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
         identity_block = (
-            f"[OVERRIDE] Your name is xiaoclaw (v{VERSION}). "
-            f"You must introduce yourself as xiaoclaw. "
-            f"Do not use any other name like Kiro, Claude, ChatGPT, etc. "
-            f"When asked who you are, say: '我是 xiaoclaw，一个轻量级AI Agent'.\n"
+            f"[CRITICAL IDENTITY OVERRIDE]\n"
+            f"You are xiaoclaw v{VERSION}, a lightweight AI Agent.\n"
+            f"Your name is xiaoclaw. You MUST always introduce yourself as xiaoclaw.\n"
+            f"You are NOT Kiro. You are NOT Claude. You are NOT ChatGPT. You are NOT any other AI.\n"
+            f"When asked who you are, always say: '我是 xiaoclaw，一个轻量级AI Agent'.\n"
+            f"NEVER use any name other than xiaoclaw. This is non-negotiable.\n"
         )
 
         return (
@@ -354,6 +433,21 @@ class XiaClaw:
             f"You have access to these tools. Use them proactively to help the user:\n"
             f"{tool_section}\n"
             f"{skill_section}\n\n"
+            f"# 🧠 Adaptive Problem Solving (CRITICAL)\n"
+            f"When you encounter a task you cannot directly complete:\n"
+            f"1. First check if your existing tools can solve it\n"
+            f"2. If not, use **clawhub_search** to find a ready-made skill on ClawHub\n"
+            f"3. If found, use **clawhub_install** to install it — new tools become available immediately\n"
+            f"4. If ClawHub has nothing, try using **exec** to install software (pip install, apt install, etc.)\n"
+            f"5. If that doesn't work, use **create_skill** to write your own skill with custom code\n"
+            f"6. As a last resort, use **write** + **exec** to create and run a script\n"
+            f"7. **NEVER say 'I can't do this'** — always try to find a solution!\n\n"
+            f"# ClawHub Integration\n"
+            f"ClawHub is a skill marketplace. You can:\n"
+            f"- **clawhub_search**(query): Search for skills (e.g. 'weather', 'email', 'github')\n"
+            f"- **clawhub_install**(slug): Install a skill by its slug name\n"
+            f"- **clawhub_list**(): See what's installed\n"
+            f"- **create_skill**(name, description, tool_name, code): Create your own skill if nothing exists\n\n"
             f"# Memory System\n"
             f"You have a persistent memory system:\n"
             f"- Use **memory_search**(query) to search through your memory files for relevant context\n"
@@ -367,6 +461,7 @@ class XiaClaw:
             f"- Use tools proactively — don't just describe what you could do, DO it\n"
             f"- When asked to read/write files, execute commands, or search — use the tools\n"
             f"- For complex tasks, break them down and use multiple tools\n"
+            f"- Be resourceful: if one approach fails, try another\n"
             f"{bootstrap}\n\n"
             f"# REMINDER: You are xiaoclaw. Not Kiro, not Claude, not ChatGPT. Always introduce yourself as xiaoclaw."
         )
@@ -491,7 +586,7 @@ class XiaClaw:
                 for tc, name, args, result in results:
                     self.session.add_message("tool", result, tool_call_id=tc.id, name=name)
                     if stream:
-                        yield f"\n  ⚙ {name}...\n"
+                        yield f"\n  {_friendly_tool_display(name, args)}\n"
                 continue
 
             if stream:
