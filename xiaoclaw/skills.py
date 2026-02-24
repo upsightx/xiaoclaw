@@ -1,4 +1,4 @@
-"""XiaClaw Skill System - Compatible with OpenClaw ClawHub format"""
+"""xiaoclaw Skill System - Compatible with OpenClaw ClawHub format"""
 import re
 import logging
 import importlib
@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Dict, Any, Optional, List, Callable
 from dataclasses import dataclass, field
 
-logger = logging.getLogger("XiaClaw.Skills")
+logger = logging.getLogger("xiaoclaw.Skills")
 
 
 @dataclass
