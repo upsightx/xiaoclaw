@@ -6,14 +6,16 @@ import json
 import asyncio
 import logging
 from pathlib import Path
-from typing import Dict, Any, Optional, List, Callable
-from dataclasses import dataclass, field
+from typing import Dict, Any, Optional, List
+from dataclasses import dataclass
 
 from .providers import ProviderManager, ProviderConfig
 from .session import Session, SessionManager, count_messages_tokens
 from .memory import MemoryManager
 from .skills import SkillRegistry, register_builtin_skills
 from .tools import ToolRegistry, TOOL_DEFS
+from .plugins import PluginManager
+from .utils import SecurityManager, RateLimiter, TokenStats, HookManager
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(name)s] %(levelname)s %(message)s')
 logger = logging.getLogger("xiaoclaw")
@@ -57,7 +59,6 @@ class XiaClawConfig:
             return cls.from_env()
 
         def _resolve(val):
-            """Resolve ${ENV_VAR} references."""
             if isinstance(val, str) and val.startswith("${") and val.endswith("}"):
                 return os.getenv(val[2:-1], "")
             return val
@@ -77,112 +78,9 @@ class XiaClawConfig:
             default_model=default_provider.get("default_model", os.getenv("XIAOCLAW_MODEL", "claude-opus-4-6")),
         )
 
-# ─── Security ─────────────────────────────────────────
 
-DANGEROUS = ["rm -rf", "dd if=", "mkfs", "> /dev/", "format c:", "del /f"]
-class SecurityManager:
-    def __init__(self, level: str = "strict", workspace: Path = Path(".")):
-        self.level = level
-        self._audit_log = workspace / ".xiaoclaw" / "audit.log"
-
-    def is_dangerous(self, action: str) -> bool:
-        if self.level == "relaxed":
-            return False
-        dangerous = any(p in action.lower() for p in DANGEROUS)
-        if dangerous:
-            self._audit("BLOCKED", action)
-        return dangerous
-
-    def _audit(self, event: str, detail: str):
-        """Append to audit log."""
-        try:
-            self._audit_log.parent.mkdir(parents=True, exist_ok=True)
-            import time as _t
-            ts = _t.strftime("%Y-%m-%d %H:%M:%S")
-            with open(self._audit_log, "a") as f:
-                f.write(f"[{ts}] {event}: {detail[:200]}\n")
-        except Exception:
-            pass
-
-    def log_tool_call(self, tool: str, args: dict):
-        """Log tool invocations for audit."""
-        self._audit("TOOL", f"{tool}({list(args.keys())})")
-
-# ─── Rate Limiter ─────────────────────────────────────
-import time as _time
-class RateLimiter:
-    """Simple token-bucket rate limiter."""
-    def __init__(self, max_calls: int = 30, window_sec: int = 60):
-        self.max_calls = max_calls
-        self.window = window_sec
-        self._calls: Dict[str, List[float]] = {}  # key → timestamps
-
-    def check(self, key: str = "default") -> bool:
-        """Return True if allowed, False if rate-limited."""
-        now = _time.time()
-        calls = self._calls.setdefault(key, [])
-        # Prune old entries
-        self._calls[key] = [t for t in calls if now - t < self.window]
-        if len(self._calls[key]) >= self.max_calls:
-            return False
-        self._calls[key].append(now)
-        return True
-
-    def remaining(self, key: str = "default") -> int:
-        now = _time.time()
-        calls = [t for t in self._calls.get(key, []) if now - t < self.window]
-        return max(0, self.max_calls - len(calls))
-
-# ─── Token Stats ──────────────────────────────────────
-class TokenStats:
-    """Track token usage across sessions."""
-    def __init__(self):
-        self.prompt_tokens = 0
-        self.completion_tokens = 0
-        self.total_tokens = 0
-        self.requests = 0
-        self.tool_calls = 0
-
-    def record(self, usage):
-        """Record usage from an API response."""
-        if usage:
-            self.prompt_tokens += getattr(usage, 'prompt_tokens', 0) or 0
-            self.completion_tokens += getattr(usage, 'completion_tokens', 0) or 0
-            self.total_tokens += getattr(usage, 'total_tokens', 0) or 0
-        self.requests += 1
-
-    def record_tool(self):
-        self.tool_calls += 1
-
-    def summary(self) -> str:
-        return (f"📊 Tokens: {self.total_tokens} (prompt={self.prompt_tokens}, "
-                f"completion={self.completion_tokens}) | "
-                f"Requests: {self.requests} | Tool calls: {self.tool_calls}")
-
-    def reset(self):
-        self.prompt_tokens = self.completion_tokens = self.total_tokens = 0
-        self.requests = self.tool_calls = 0
-
-# ─── Hook System ──────────────────────────────────────
-class HookManager:
-    """before_tool_call / after_tool_call / message_received hooks."""
-
-    def __init__(self):
-        self._hooks: Dict[str, List[Callable]] = {}
-
-    def register(self, event: str, fn: Callable):
-        self._hooks.setdefault(event, []).append(fn)
-
-    async def fire(self, event: str, **kwargs) -> Any:
-        for fn in self._hooks.get(event, []):
-            try:
-                r = fn(**kwargs) if not asyncio.iscoroutinefunction(fn) else await fn(**kwargs)
-                if r is not None:
-                    return r
-            except Exception as e:
-                logger.error(f"Hook '{event}' error: {e}")
-        return None
 # ─── xiaoclaw Core ────────────────────────────────────
+
 class XiaClaw:
     def __init__(self, config: Optional[XiaClawConfig] = None):
         self.config = config or XiaClawConfig.from_env()
@@ -195,6 +93,9 @@ class XiaClaw:
         self.hooks = HookManager()
         self.session_mgr = SessionManager(self.workspace / ".xiaoclaw" / "sessions")
         self.session = self.session_mgr.new_session()
+
+        # Concurrent session support (multi-user)
+        self._user_sessions: Dict[str, Session] = {}
 
         # Providers
         self.providers = ProviderManager()
@@ -213,8 +114,18 @@ class XiaClaw:
         if skills_dir.exists():
             self.skills.load_from_dir(skills_dir)
 
-        # Bootstrap system prompt from workspace files
-        self._bootstrap_context = self._load_bootstrap()
+        # Plugins (pip-installable)
+        self.plugins = PluginManager()
+        self.plugins.discover()
+        self.plugins.apply_to_claw(self)
+
+        # Bootstrap system prompt (lazy: only on first use)
+        self._bootstrap_context: Optional[str] = None
+
+        # Config hot-reload watcher
+        self._config_path: Optional[str] = None
+        self._config_mtime: float = 0
+
         logger.info(f"xiaoclaw v{VERSION} ready | model={self.config.default_model}")
 
     def _load_bootstrap(self) -> str:
@@ -223,21 +134,49 @@ class XiaClaw:
         files = self.memory.read_bootstrap_files()
         for name, content in files.items():
             parts.append(f"--- {name} ---\n{content[:2000]}")
-        # Recent memory
         daily = self.memory.read_recent_daily(days=2)
         for date, content in daily.items():
             parts.append(f"--- memory/{date}.md ---\n{content[:1000]}")
         return "\n\n".join(parts)
 
+    @property
+    def bootstrap_context(self) -> str:
+        """Lazy-loaded bootstrap context."""
+        if self._bootstrap_context is None:
+            self._bootstrap_context = self._load_bootstrap()
+        return self._bootstrap_context
+
+    def _get_user_session(self, user_id: str) -> Session:
+        """Get or create a session for a specific user (concurrent multi-user)."""
+        if user_id == "default":
+            return self.session
+        if user_id not in self._user_sessions:
+            self._user_sessions[user_id] = self.session_mgr.new_session(f"user-{user_id[:8]}")
+        return self._user_sessions[user_id]
+
+    def _check_config_reload(self):
+        """Auto-reload config if file changed (hot-reload)."""
+        if not self._config_path:
+            return
+        try:
+            p = Path(self._config_path)
+            if p.exists():
+                mtime = p.stat().st_mtime
+                if mtime > self._config_mtime:
+                    self._config_mtime = mtime
+                    self.reload_config(self._config_path)
+                    logger.info("Config hot-reloaded")
+        except Exception:
+            pass
+
     def _system_prompt(self) -> str:
-        # Check for custom template
         template_file = self.workspace / ".xiaoclaw" / "prompt.txt"
         if template_file.exists():
             try:
                 tmpl = template_file.read_text(encoding="utf-8")
                 return tmpl.replace("{{version}}", VERSION).replace(
                     "{{tools}}", ", ".join(self.tools.list_names())
-                ).replace("{{bootstrap}}", self._bootstrap_context[:3000])
+                ).replace("{{bootstrap}}", self.bootstrap_context[:3000])
             except Exception:
                 pass
 
@@ -247,8 +186,8 @@ class XiaClaw:
         if active:
             skill_info = "\nActive skills: " + ", ".join(s.name for s in active)
         bootstrap = ""
-        if self._bootstrap_context:
-            bootstrap = f"\n\n## Workspace Context\n{self._bootstrap_context[:3000]}"
+        if self.bootstrap_context:
+            bootstrap = f"\n\n## Workspace Context\n{self.bootstrap_context[:3000]}"
         return (
             f"你是 xiaoclaw v{VERSION}，一个兼容OpenClaw生态的轻量级AI Agent。\n"
             f"工具: {tool_list}{skill_info}\n"
@@ -256,7 +195,7 @@ class XiaClaw:
         )
 
     async def _compact(self):
-        """Compress old messages when exceeding token threshold. Uses LLM summary if available."""
+        """Compress old messages when exceeding token threshold."""
         tokens = count_messages_tokens(self.session.messages)
         if tokens < self.config.compaction_threshold:
             return
@@ -271,10 +210,8 @@ class XiaClaw:
         old_msgs = self.session.messages[:n - 4]
         recent = self.session.messages[n - 4:]
 
-        # Try LLM-based summary
         summary = await self._llm_summarize(old_msgs)
         if not summary:
-            # Fallback: simple truncation
             summary_text = []
             for m in old_msgs:
                 c = m.get("content", "")
@@ -313,7 +250,7 @@ class XiaClaw:
         return ""
 
     async def _llm_call_with_retry(self, client, model, messages, **kwargs):
-        """LLM call with exponential backoff retry. Returns response or raises."""
+        """LLM call with exponential backoff retry."""
         max_retries = 3
         for attempt in range(max_retries):
             try:
@@ -328,7 +265,7 @@ class XiaClaw:
                 await asyncio.sleep(wait)
 
     async def _agent_loop(self, sys_prompt: str, stream: bool = False):
-        """Core agent loop: LLM → tool calls → repeat. Yields chunks if stream=True."""
+        """Core agent loop: LLM → tool calls → repeat."""
         max_rounds = 10
         client = self.providers.active.client
         model = self.providers.active.current_model
@@ -356,7 +293,6 @@ class XiaClaw:
                                          for tc in choice.message.tool_calls]}
                 self.session.add_message(**tc_msg)
 
-                # Execute tool calls (parallel if multiple)
                 async def _run_tool(tc):
                     name = tc.function.name
                     try: args = json.loads(tc.function.arguments)
@@ -381,9 +317,7 @@ class XiaClaw:
                         yield f"\n  ⚙ {name}({', '.join(f'{k}=' for k in args)})\n"
                 continue
 
-            # Final response — stream it if requested
             if stream:
-                # Re-do as streaming call (no tools this round)
                 ctx = self.session.get_context_window(self.config.max_context_tokens)
                 all_msgs = [{"role": "system", "content": sys_prompt}] + ctx
                 full = ""
@@ -416,33 +350,47 @@ class XiaClaw:
         """Process a user message, return full response."""
         if not self.rate_limiter.check(user_id):
             return "⚠️ Rate limited. Please wait a moment."
+        self._check_config_reload()
         await self.hooks.fire("message_received", message=message)
         self.skills.activate_for_message(message)
-        self.session.add_message("user", message)
+
+        session = self._get_user_session(user_id)
+        session.add_message("user", message)
+        orig_session = self.session
+        self.session = session
         await self._compact()
 
         if not (self.providers.active and self.providers.active.ready):
+            self.session = orig_session
             return self._fallback(message)
 
         parts = []
         async for chunk in self._agent_loop(self._system_prompt(), stream=False):
             parts.append(chunk)
+        self.session = orig_session
         return "".join(parts)
 
     async def handle_message_stream(self, message: str, user_id: str = "default"):
         """Process a user message, yield streaming chunks."""
         if not self.rate_limiter.check(user_id):
             yield "⚠️ Rate limited. Please wait a moment."; return
+        self._check_config_reload()
         await self.hooks.fire("message_received", message=message)
         self.skills.activate_for_message(message)
-        self.session.add_message("user", message)
+
+        session = self._get_user_session(user_id)
+        session.add_message("user", message)
+        orig_session = self.session
+        self.session = session
         await self._compact()
 
         if not (self.providers.active and self.providers.active.ready):
+            self.session = orig_session
             yield self._fallback(message); return
 
         async for chunk in self._agent_loop(self._system_prompt(), stream=True):
             yield chunk
+        self.session = orig_session
 
     def _fallback(self, message: str) -> str:
         if "你好" in message or "hello" in message.lower():
@@ -467,3 +415,26 @@ class XiaClaw:
                 "tool_calls": self.stats.tool_calls,
             },
         }
+
+    def reload_config(self, config_path: str = "config.yaml"):
+        """Hot-reload configuration from file."""
+        try:
+            new_config = XiaClawConfig.from_yaml(config_path)
+            old_model = self.config.default_model
+            self.config = new_config
+            if new_config.api_key and (
+                new_config.api_key != self.providers.active.config.api_key if self.providers.active else True
+            ):
+                self.providers.add(ProviderConfig(
+                    name="default", api_key=new_config.api_key,
+                    base_url=new_config.base_url,
+                    models=[new_config.default_model],
+                    default_model=new_config.default_model,
+                ))
+            elif self.providers.active and new_config.default_model != old_model:
+                self.providers.active.current_model = new_config.default_model
+            logger.info(f"Config reloaded: model={new_config.default_model}")
+            return True
+        except Exception as e:
+            logger.error(f"Config reload failed: {e}")
+            return False
