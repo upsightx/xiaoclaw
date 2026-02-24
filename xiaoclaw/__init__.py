@@ -1,4 +1,4 @@
-"""XiaClaw - Lightweight AI Agent compatible with OpenClaw"""
+"""xiaoclaw - Lightweight AI Agent compatible with OpenClaw"""
 
 from .core import XiaClaw, XiaClawConfig, VERSION
 from .providers import ProviderManager, ProviderConfig
