@@ -111,6 +111,25 @@ class ProviderManager:
             for n, p in self.providers.items()
         ]
 
+    async def chat_with_failover(self, messages: List[Dict], **kwargs) -> str:
+        """Try active provider, failover to others on failure."""
+        tried = set()
+        for name in [self.active_name] + [n for n in self.providers if n != self.active_name]:
+            if name in tried or name not in self.providers:
+                continue
+            tried.add(name)
+            p = self.providers[name]
+            if not p.ready:
+                continue
+            result = await p.chat(messages, **kwargs)
+            if not result.startswith("[LLM Error"):
+                if name != self.active_name:
+                    logger.info(f"Failover: switched to '{name}'")
+                    self.active_name = name
+                return result
+            logger.warning(f"Provider '{name}' failed, trying next...")
+        return "[All providers failed]"
+
     async def chat(self, messages: List[Dict], **kwargs) -> str:
         if not self.active:
             return "[No active provider]"

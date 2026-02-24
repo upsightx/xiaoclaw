@@ -89,6 +89,62 @@ class SecurityManager:
         if self.level == "relaxed":
             return False
         return any(p in action.lower() for p in DANGEROUS)
+
+# ─── Rate Limiter ─────────────────────────────────────
+import time as _time
+class RateLimiter:
+    """Simple token-bucket rate limiter."""
+    def __init__(self, max_calls: int = 30, window_sec: int = 60):
+        self.max_calls = max_calls
+        self.window = window_sec
+        self._calls: Dict[str, List[float]] = {}  # key → timestamps
+
+    def check(self, key: str = "default") -> bool:
+        """Return True if allowed, False if rate-limited."""
+        now = _time.time()
+        calls = self._calls.setdefault(key, [])
+        # Prune old entries
+        self._calls[key] = [t for t in calls if now - t < self.window]
+        if len(self._calls[key]) >= self.max_calls:
+            return False
+        self._calls[key].append(now)
+        return True
+
+    def remaining(self, key: str = "default") -> int:
+        now = _time.time()
+        calls = [t for t in self._calls.get(key, []) if now - t < self.window]
+        return max(0, self.max_calls - len(calls))
+
+# ─── Token Stats ──────────────────────────────────────
+class TokenStats:
+    """Track token usage across sessions."""
+    def __init__(self):
+        self.prompt_tokens = 0
+        self.completion_tokens = 0
+        self.total_tokens = 0
+        self.requests = 0
+        self.tool_calls = 0
+
+    def record(self, usage):
+        """Record usage from an API response."""
+        if usage:
+            self.prompt_tokens += getattr(usage, 'prompt_tokens', 0) or 0
+            self.completion_tokens += getattr(usage, 'completion_tokens', 0) or 0
+            self.total_tokens += getattr(usage, 'total_tokens', 0) or 0
+        self.requests += 1
+
+    def record_tool(self):
+        self.tool_calls += 1
+
+    def summary(self) -> str:
+        return (f"📊 Tokens: {self.total_tokens} (prompt={self.prompt_tokens}, "
+                f"completion={self.completion_tokens}) | "
+                f"Requests: {self.requests} | Tool calls: {self.tool_calls}")
+
+    def reset(self):
+        self.prompt_tokens = self.completion_tokens = self.total_tokens = 0
+        self.requests = self.tool_calls = 0
+
 # ─── Hook System ──────────────────────────────────────
 class HookManager:
     """before_tool_call / after_tool_call / message_received hooks."""
@@ -155,11 +211,17 @@ class ToolRegistry:
         """Execute a tool by name with args dict."""
         tool = self.tools.get(name)
         if not tool:
-            return f"Error: unknown tool '{name}'"
+            return f"Error: unknown tool '{name}'. Available: {', '.join(self.list_names())}"
         try:
             return str(tool["func"](**args))
+        except TypeError as e:
+            return f"Error calling {name}: bad arguments — {e}"
+        except PermissionError as e:
+            return f"Error calling {name}: permission denied — {e}"
+        except FileNotFoundError as e:
+            return f"Error calling {name}: file not found — {e}"
         except Exception as e:
-            return f"Error calling {name}: {e}"
+            return f"Error calling {name}: {type(e).__name__}: {e}"
 
     def openai_functions(self) -> List[Dict]:
         """Return OpenAI function-calling tool definitions."""
@@ -208,6 +270,8 @@ class XiaClaw:
         self.config = config or XiaClawConfig.from_env()
         self.workspace = Path(self.config.workspace)
         self.security = SecurityManager(self.config.security_level)
+        self.rate_limiter = RateLimiter()
+        self.stats = TokenStats()
         self.memory = MemoryManager(self.workspace)
         self.tools = ToolRegistry(self.security, memory=self.memory)
         self.hooks = HookManager()
@@ -294,6 +358,21 @@ class XiaClaw:
         self.session.save()
         logger.info(f"Compacted to {len(self.session.messages)} messages")
 
+    async def _llm_call_with_retry(self, client, model, messages, **kwargs):
+        """LLM call with exponential backoff retry. Returns response or raises."""
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                return await client.chat.completions.create(
+                    model=model, messages=messages, **kwargs
+                )
+            except Exception as e:
+                if attempt == max_retries - 1:
+                    raise
+                wait = (2 ** attempt) + 0.5
+                logger.warning(f"LLM retry {attempt+1}/{max_retries} after {wait}s: {e}")
+                await asyncio.sleep(wait)
+
     async def _agent_loop(self, sys_prompt: str, stream: bool = False):
         """Core agent loop: LLM → tool calls → repeat. Yields chunks if stream=True."""
         max_rounds = 10
@@ -305,21 +384,15 @@ class XiaClaw:
             all_msgs = [{"role": "system", "content": sys_prompt}] + ctx
 
             try:
-                if stream:
-                    # Non-streaming call for tool-calling rounds, stream only final text
-                    resp = await client.chat.completions.create(
-                        model=model, messages=all_msgs,
-                        tools=self.tools.openai_functions(), max_tokens=2000,
-                    )
-                else:
-                    resp = await client.chat.completions.create(
-                        model=model, messages=all_msgs,
-                        tools=self.tools.openai_functions(), max_tokens=2000,
-                    )
+                resp = await self._llm_call_with_retry(
+                    client, model, all_msgs,
+                    tools=self.tools.openai_functions(), max_tokens=2000,
+                )
             except Exception as e:
-                logger.error(f"LLM error: {e}")
+                logger.error(f"LLM error after retries: {e}")
                 yield f"[LLM Error: {e}]"; return
 
+            self.stats.record(getattr(resp, 'usage', None))
             choice = resp.choices[0]
 
             if choice.message.tool_calls:
@@ -336,6 +409,7 @@ class XiaClaw:
 
                     await self.hooks.fire("before_tool_call", tool=name, args=args)
                     result = self.tools.call(name, args)
+                    self.stats.record_tool()
                     await self.hooks.fire("after_tool_call", tool=name, args=args, result=result)
                     logger.info(f"Tool: {name}({list(args.keys())}) → {len(result)} chars")
                     self.session.add_message("tool", result, tool_call_id=tc.id, name=name)
@@ -374,8 +448,10 @@ class XiaClaw:
 
         yield "[Agent loop exceeded max rounds]"
 
-    async def handle_message(self, message: str) -> str:
+    async def handle_message(self, message: str, user_id: str = "default") -> str:
         """Process a user message, return full response."""
+        if not self.rate_limiter.check(user_id):
+            return "⚠️ Rate limited. Please wait a moment."
         await self.hooks.fire("message_received", message=message)
         self.skills.activate_for_message(message)
         self.session.add_message("user", message)
@@ -389,8 +465,10 @@ class XiaClaw:
             parts.append(chunk)
         return "".join(parts)
 
-    async def handle_message_stream(self, message: str):
+    async def handle_message_stream(self, message: str, user_id: str = "default"):
         """Process a user message, yield streaming chunks."""
+        if not self.rate_limiter.check(user_id):
+            yield "⚠️ Rate limited. Please wait a moment."; return
         await self.hooks.fire("message_received", message=message)
         self.skills.activate_for_message(message)
         self.session.add_message("user", message)
@@ -408,65 +486,3 @@ class XiaClaw:
         if "工具" in message or "tools" in message.lower():
             return f"工具: {', '.join(self.tools.list_names())}"
         return f"[无LLM] 收到: {message[:100]}"
-
-# ─── CLI ─────────────────────────────────────────────
-
-async def main():
-    import sys
-    # Support --config path
-    config_path = None
-    for i, arg in enumerate(sys.argv):
-        if arg == "--config" and i + 1 < len(sys.argv):
-            config_path = sys.argv[i + 1]
-
-    config = XiaClawConfig.from_yaml(config_path) if config_path else XiaClawConfig.from_env()
-    claw = XiaClaw(config)
-    p = claw.providers.active
-    print(f"\n  xiaoclaw v{VERSION} | {p.current_model if p else 'no LLM'} | session={claw.session.session_id}\n")
-
-    if "--test" in sys.argv:
-        print("--- Self Test ---")
-        from .providers import test_providers; test_providers()
-        from .session import test_session; test_session()
-        from .memory import test_memory; test_memory()
-        from .skills import test_skills; test_skills()
-        from .web import test_web; test_web()
-        for msg in ["你好", "工具列表", "1+1等于几？"]:
-            r = await claw.handle_message(msg)
-            print(f"  > {msg}\n  < {r[:200]}\n")
-        print("  ✓ All tests passed!"); return
-
-    CMDS = {
-        "/help": lambda: print("  /tools /skills /model /sessions /memory /clear /quit"),
-        "/tools": lambda: print(f"  {', '.join(claw.tools.list_names())}"),
-        "/memory": lambda: print(f"  MEMORY.md: {len(claw.memory.read_memory())} chars"),
-        "/clear": lambda: (setattr(claw, 'session', claw.session_mgr.new_session()), print("  New session")),
-    }
-    print("─" * 50)
-    while True:
-        try: user_input = input("\n🧑 You: ").strip()
-        except (KeyboardInterrupt, EOFError): print("\nBye!"); break
-        if not user_input: continue
-        cmd = user_input.lower()
-        if cmd in ("/quit", "/exit", "/q"): claw.session.save(); print("Bye!"); break
-        if cmd in CMDS: CMDS[cmd](); continue
-        if cmd == "/skills":
-            for n in claw.skills.list_skills(): print(f"  {n}: {list(claw.skills.get_skill(n).tools.keys())}")
-            continue
-        if cmd == "/model":
-            for pi in claw.providers.list_providers(): print(f"  {'→' if pi['active'] else ' '} {pi['name']}: {pi['model']}")
-            continue
-        if cmd == "/sessions":
-            for s in claw.session_mgr.list_sessions(): print(f"  {s['session_id']} ({s['size']}B)")
-            continue
-        print(f"\n🐾 xiaoclaw: ", end="", flush=True)
-        async for chunk in claw.handle_message_stream(user_input):
-            print(chunk, end="", flush=True)
-        print()  # newline after stream
-
-def _cli_entry():
-    """Entry point for `xiaoclaw` console command."""
-    asyncio.run(main())
-
-if __name__ == "__main__":
-    _cli_entry()

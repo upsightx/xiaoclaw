@@ -36,7 +36,7 @@ all = ["python-telegram-bot>=21.0"]
 dev = ["pytest", "pytest-asyncio"]
 
 [project.scripts]
-xiaoclaw = "xiaoclaw.core:_cli_entry"
+xiaoclaw = "xiaoclaw.cli:_cli_entry"
 
 [project.urls]
 Homepage = "https://github.com/upsightx/xiaoclaw"
