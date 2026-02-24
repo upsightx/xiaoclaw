@@ -33,7 +33,7 @@ class XiaClawConfig:
     debug: bool = False
     security_level: str = "strict"
     workspace: str = "."
-    max_context_tokens: int = 32000
+    max_context_tokens: int = 128000
     compaction_threshold: int = 6000
     default_model: str = "claude-opus-4-6"
     api_key: str = "sk-iHus2xPomk0gCRPcqhxbLOw8zffMUeg7pryj1qnO5Cb698pW"
@@ -45,7 +45,7 @@ class XiaClawConfig:
             debug=os.getenv("XIAOCLAW_DEBUG", "false").lower() == "true",
             security_level=os.getenv("XIAOCLAW_SECURITY", "strict"),
             workspace=os.getenv("XIAOCLAW_WORKSPACE", "."),
-            max_context_tokens=int(os.getenv("XIAOCLAW_MAX_TOKENS", "32000")),
+            max_context_tokens=int(os.getenv("XIAOCLAW_MAX_TOKENS", "128000")),
             compaction_threshold=int(os.getenv("XIAOCLAW_COMPACT_THRESHOLD", "6000")),
             api_key=os.getenv("OPENAI_API_KEY", "sk-iHus2xPomk0gCRPcqhxbLOw8zffMUeg7pryj1qnO5Cb698pW"),
             base_url=os.getenv("OPENAI_BASE_URL", "https://ai.ltcraft.cn:12000/v1"),
@@ -75,7 +75,7 @@ class XiaClawConfig:
             debug=cfg.get("debug", os.getenv("XIAOCLAW_DEBUG", "false").lower() == "true"),
             security_level=cfg.get("security", os.getenv("XIAOCLAW_SECURITY", "strict")),
             workspace=cfg.get("workspace", os.getenv("XIAOCLAW_WORKSPACE", ".")),
-            max_context_tokens=cfg.get("max_context_tokens", int(os.getenv("XIAOCLAW_MAX_TOKENS", "32000"))),
+            max_context_tokens=cfg.get("max_context_tokens", int(os.getenv("XIAOCLAW_MAX_TOKENS", "128000"))),
             compaction_threshold=cfg.get("compaction_threshold", int(os.getenv("XIAOCLAW_COMPACT_THRESHOLD", "6000"))),
             api_key=_resolve(default_provider.get("api_key", os.getenv("OPENAI_API_KEY", ""))),
             base_url=default_provider.get("base_url", os.getenv("OPENAI_BASE_URL", "https://ai.ltcraft.cn:12000/v1")),
@@ -506,7 +506,6 @@ class XiaClaw:
             f"- Be resourceful: if one approach fails, try another\n"
             f"- 你是用户的AI助手，不是xiaoclaw的开发者。不要读取自己的源码来'升级自己'\n"
             f"- 如果用户让你'升级xiaoclaw'，告诉他你是xiaoclaw本身，可以帮他做其他事情\n"
-            f"- 读文件时如果被截断了，不要用sed/head/tail分段读，直接用截断的内容回答\n"
             f"{bootstrap}"
         )
 
@@ -645,9 +644,6 @@ class XiaClaw:
                     await self.hooks.fire("before_tool_call", tool=name, args=args)
                     self.security.log_tool_call(name, args)
                     result = self.tools.call(name, args)
-                    # Truncate long tool results to avoid context overflow
-                    if len(result) > 3000:
-                        result = result[:3000] + f"\n... [truncated, {len(result)} chars total]"
                     self.stats.record_tool()
                     await self.hooks.fire("after_tool_call", tool=name, args=args, result=result)
                     logger.info(f"Tool: {name}({list(args.keys())}) → {len(result)} chars")
