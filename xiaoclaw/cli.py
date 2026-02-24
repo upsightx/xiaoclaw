@@ -114,11 +114,15 @@ async def main():
 
     print("─" * 50)
     while True:
-        try: user_input = input("\n🧑 You: ").strip()
+        try:
+            user_input = input("\n🧑 You: ").strip()
         except (KeyboardInterrupt, EOFError):
             await _save_session_memory(claw)
             print("\nBye!")
             break
+        except UnicodeDecodeError:
+            print("  ⚠ 输入编码错误，请重新输入")
+            continue
         if not user_input: continue
         cmd = user_input.lower().split()[0] if user_input.startswith("/") else ""
         cmd = ALIASES.get(cmd, cmd)
