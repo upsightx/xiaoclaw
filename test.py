@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Test script for XiaClaw"""
+"""Test script for xiaoclaw"""
 
 import asyncio
 import sys
@@ -10,7 +10,7 @@ from xiaoclaw.core import XiaClaw, XiaClawConfig
 
 async def test_core():
     """测试核心功能"""
-    print("=== Testing XiaClaw Core ===\n")
+    print("=== Testing xiaoclaw Core ===\n")
     
     # 创建配置
     config = XiaClawConfig(
@@ -33,12 +33,12 @@ async def test_core():
     
     # 测试3: 写文件
     print("Test 3: Write file")
-    result = claw.tools._tool_write("Hello from XiaClaw!", "/tmp/test_xiaoclaw.txt")
+    result = claw.tools._tool_write("Hello from xiaoclaw!", "/tmp/test_xiaoclaw.txt")
     print(f"  Result: {result}\n")
     
     # 测试4: 执行命令
     print("Test 4: Exec command")
-    result = claw.tools._tool_exec("echo 'XiaClaw works!'")
+    result = claw.tools._tool_exec("echo 'xiaoclaw works!'")
     print(f"  Result: {result}\n")
     
     # 测试5: 处理消息
@@ -52,7 +52,7 @@ async def test_core():
     for msg in messages:
         response = await claw.handle_message(msg)
         print(f"  User: {msg}")
-        print(f"  XiaClaw: {response}\n")
+        print(f"  xiaoclaw: {response}\n")
     
     # 测试6: 安全检查
     print("Test 6: Security check")
