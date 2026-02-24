@@ -144,8 +144,8 @@ class ToolRegistry:
         if not p.exists(): return f"Error: not found: {p}"
         try:
             text = p.read_text(encoding="utf-8")
-            if len(text) > 2000:
-                return text[:2000] + f"\n... [truncated, {len(text)} chars total, use offset/limit for more]"
+            if len(text) > 8000:
+                return text[:8000] + f"\n... [truncated, {len(text)} chars total]"
             return text
         except Exception as e: return f"Error: {e}"
 
