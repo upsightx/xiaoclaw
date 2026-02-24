@@ -110,25 +110,61 @@ class Session:
             self._file.unlink()
 
     def get_context_window(self, max_tokens: int = 8000) -> List[Dict]:
-        """Get recent messages fitting within token budget, preserving tool call structure."""
-        result = []
+        """Get recent messages fitting within token budget, preserving tool call pairs."""
+        # Build from the end, but keep tool_call groups together
+        # First, identify groups: (assistant with tool_calls) + (all following tool responses)
+        groups = []  # each group is a list of message indices
+        i = 0
+        while i < len(self.messages):
+            msg = self.messages[i]
+            if msg.get("role") == "assistant" and "tool_calls" in msg:
+                group = [i]
+                j = i + 1
+                while j < len(self.messages) and self.messages[j].get("role") == "tool":
+                    group.append(j)
+                    j += 1
+                groups.append(group)
+                i = j
+            else:
+                groups.append([i])
+                i += 1
+
+        # Now select groups from the end, respecting token budget
+        selected = []
         tokens = 0
-        for msg in reversed(self.messages):
-            content = msg.get("content", "")
-            mt = count_tokens(content) + 4 if isinstance(content, str) else 100
-            if tokens + mt > max_tokens and result:
+        for group in reversed(groups):
+            group_tokens = 0
+            for idx in group:
+                c = self.messages[idx].get("content", "")
+                group_tokens += count_tokens(c) + 4 if isinstance(c, str) else 100
+            if tokens + group_tokens > max_tokens and selected:
                 break
-            # Build API-compatible message
-            m = {"role": msg["role"], "content": content}
-            if "tool_calls" in msg:
-                m["tool_calls"] = msg["tool_calls"]
-            if "tool_call_id" in msg:
-                m["tool_call_id"] = msg["tool_call_id"]
-            if "name" in msg and msg["role"] == "tool":
-                m["name"] = msg["name"]
-            result.insert(0, m)
-            tokens += mt
+            selected.insert(0, group)
+            tokens += group_tokens
+
+        # Flatten and convert
+        result = []
+        for group in selected:
+            for idx in group:
+                result.append(self._msg_to_api(self.messages[idx]))
         return result
+
+    @staticmethod
+    def _msg_to_api(msg: Dict) -> Dict:
+        """Convert internal message to API-compatible format."""
+        m = {"role": msg["role"]}
+        content = msg.get("content", "")
+        if msg.get("role") == "assistant" and "tool_calls" in msg:
+            m["content"] = content if content else None
+            m["tool_calls"] = msg["tool_calls"]
+        elif msg.get("role") == "tool":
+            m["content"] = content or ""
+            m["tool_call_id"] = msg.get("tool_call_id", "")
+            if "name" in msg:
+                m["name"] = msg["name"]
+        else:
+            m["content"] = content or ""
+        return m
 
 
 class SessionManager:
