@@ -1,11 +1,11 @@
-"""XiaClaw Memory System - Compatible with OpenClaw memory format"""
+"""xiaoclaw Memory System - Compatible with OpenClaw memory format"""
 import re
 import logging
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import List, Dict, Optional, Tuple
 
-logger = logging.getLogger("XiaClaw.Memory")
+logger = logging.getLogger("xiaoclaw.Memory")
 
 DEFAULT_WORKSPACE = Path(".")
 
@@ -206,7 +206,7 @@ def test_memory():
         assert "remember" in daily.lower() or "pytest" in daily.lower()
 
         # Bootstrap files
-        (tmp / "SOUL.md").write_text("I am XiaClaw")
+        (tmp / "SOUL.md").write_text("I am xiaoclaw")
         files = mem.read_bootstrap_files()
         assert "SOUL.md" in files
 
