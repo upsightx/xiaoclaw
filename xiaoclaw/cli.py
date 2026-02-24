@@ -5,6 +5,7 @@ import asyncio
 from pathlib import Path
 
 from .core import XiaClaw, XiaClawConfig, VERSION
+from .battle import BattleEngine, PRESET_ROLES, DEFAULT_BATTLE_ROLES, list_preset_roles, format_battle_output
 
 
 async def _save_session_memory(claw):
@@ -81,7 +82,7 @@ async def main():
         print("  ✓ All tests passed!"); return
 
     CMDS = {
-        "/help": lambda: print("  /tools /skills /skill /model /sessions /restore /memory /stats /clear /export /loglevel /quit"),
+        "/help": lambda: print("  /tools /skills /skill /model /sessions /restore /memory /stats /clear /export /loglevel /battle /battle-roles /battle-custom /quit"),
         "/tools": lambda: print(f"  {', '.join(claw.tools.list_names())}"),
         "/t": lambda: print(f"  {', '.join(claw.tools.list_names())}"),
         "/memory": lambda: print(f"  MEMORY.md: {len(claw.memory.read_memory())} chars"),
@@ -186,6 +187,45 @@ async def main():
             ok = claw.reload_config(config_path or "config.yaml")
             print(f"  Config {'reloaded' if ok else 'reload failed'}")
             continue
+        # ─── Battle Commands ──────────────────────────
+        if cmd == "/battle-roles":
+            print(list_preset_roles())
+            continue
+        if cmd == "/battle-custom":
+            # /battle-custom ceo,dev,devil 问题内容
+            parts = user_input.split(None, 2)
+            if len(parts) < 3:
+                print("  用法: /battle-custom <角色1,角色2,...> <问题>")
+                print(f"  可用角色: {', '.join(PRESET_ROLES.keys())}")
+                continue
+            role_str, question = parts[1], parts[2]
+            role_keys = [r.strip() for r in role_str.split(",") if r.strip()]
+            p = claw.providers.active
+            if not (p and p.ready):
+                print("  ❌ LLM未配置，无法执行battle")
+                continue
+            print(f"\n🏢 Battle开始... (角色: {', '.join(role_keys)})\n")
+            engine = BattleEngine(p)
+            result = await engine.battle(question, role_keys=role_keys)
+            print(result["formatted"])
+            continue
+        if cmd == "/battle":
+            # /battle 问题内容
+            question = user_input[len("/battle"):].strip()
+            if not question:
+                print("  用法: /battle <问题>")
+                print(f"  默认角色: {', '.join(DEFAULT_BATTLE_ROLES)}")
+                continue
+            p = claw.providers.active
+            if not (p and p.ready):
+                print("  ❌ LLM未配置，无法执行battle")
+                continue
+            print(f"\n🏢 Battle开始... (角色: {', '.join(DEFAULT_BATTLE_ROLES)})\n")
+            engine = BattleEngine(p)
+            result = await engine.battle(question)
+            print(result["formatted"])
+            continue
+        # ─── End Battle Commands ──────────────────────
         print(f"\n🐾 xiaoclaw: ", end="", flush=True)
         async for chunk in claw.handle_message_stream(user_input):
             print(chunk, end="", flush=True)
