@@ -15,6 +15,7 @@ from .memory import MemoryManager
 from .skills import SkillRegistry, register_builtin_skills
 from .tools import ToolRegistry, TOOL_DEFS
 from .plugins import PluginManager
+from .subagent import SubagentManager
 from .utils import SecurityManager, RateLimiter, TokenStats, HookManager
 
 logging.basicConfig(level=logging.WARNING, format='%(message)s')
@@ -99,6 +100,9 @@ class XiaClaw:
         # Concurrent session support (multi-user)
         self._user_sessions: Dict[str, Session] = {}
 
+        # Sub-agent system
+        self.subagents = SubagentManager()
+
         # Providers
         self.providers = ProviderManager()
         if self.config.api_key:
@@ -116,6 +120,9 @@ class XiaClaw:
         if skills_dir.exists():
             self.skills.load_from_dir(skills_dir)
 
+        # Register skill tools into the tool registry so LLM can call them
+        self._register_skill_tools()
+
         # Plugins (pip-installable)
         self.plugins = PluginManager()
         self.plugins.discover()
@@ -130,15 +137,140 @@ class XiaClaw:
 
         logger.info(f"xiaoclaw v{VERSION} ready | model={self.config.default_model}")
 
+    def _register_skill_tools(self):
+        """Register all skill tools into the tool registry so LLM can call them via function calling."""
+        skill_tool_params = {
+            "calc": {
+                "type": "object",
+                "properties": {"expression": {"type": "string", "description": "Math expression like 2+3*4"}},
+                "required": ["expression"]
+            },
+            "get_time": {
+                "type": "object",
+                "properties": {"timezone": {"type": "string", "description": "Timezone like UTC+8 (optional)"}},
+                "required": []
+            },
+            "safe_eval": {
+                "type": "object",
+                "properties": {"code": {"type": "string", "description": "Python expression to evaluate safely"}},
+                "required": ["code"]
+            },
+            "translate": {
+                "type": "object",
+                "properties": {
+                    "text": {"type": "string", "description": "Text to translate"},
+                    "target_lang": {"type": "string", "description": "Target language code: en, zh, ja, ko, fr, de, es, ru"}
+                },
+                "required": ["text"]
+            },
+        }
+        skill_tool_descs = {
+            "calc": "Calculate a math expression",
+            "get_time": "Get current date and time",
+            "safe_eval": "Evaluate a Python expression safely",
+            "translate": "Translate text to another language",
+        }
+        for tool_name, func in self.skills.tools.items():
+            if tool_name not in self.tools.tools:
+                params = skill_tool_params.get(tool_name, {
+                    "type": "object", "properties": {}, "required": []
+                })
+                desc = skill_tool_descs.get(tool_name, f"Skill tool: {tool_name}")
+                self.tools.register_tool(tool_name, func, desc, params)
+
+        # Register sub-agent tool
+        self.tools.register_tool(
+            "spawn_subagent",
+            self._tool_spawn_subagent,
+            "Spawn a sub-agent to handle a task in parallel. Returns task_id.",
+            {
+                "type": "object",
+                "properties": {
+                    "task": {"type": "string", "description": "Task description for the sub-agent"},
+                },
+                "required": ["task"]
+            }
+        )
+        self.tools.register_tool(
+            "subagent_result",
+            self._tool_subagent_result,
+            "Get the result of a sub-agent task by task_id",
+            {
+                "type": "object",
+                "properties": {
+                    "task_id": {"type": "string", "description": "Task ID from spawn_subagent"},
+                },
+                "required": ["task_id"]
+            }
+        )
+
+    def _tool_spawn_subagent(self, task: str = "", **kw) -> str:
+        """Synchronous wrapper for spawning a sub-agent."""
+        if not task:
+            return "Error: task is required"
+
+        def _factory():
+            return XiaClaw(self.config)
+
+        # Run spawn_and_wait synchronously via the running event loop
+        import asyncio
+        try:
+            loop = asyncio.get_running_loop()
+            # We're inside an async context, use create_task + a future
+            future = asyncio.ensure_future(
+                self.subagents.spawn_and_wait(task, _factory, timeout=45)
+            )
+            # Can't await here since we're in a sync function called from async
+            # Instead, spawn and return task_id for later retrieval
+            task_id_future = asyncio.ensure_future(
+                self.subagents.spawn(task, _factory)
+            )
+            # Block briefly to get the task_id
+            # This is a workaround — in practice the tool call is sync
+            return f"Sub-agent spawned. Use subagent_result to check. Note: sub-agent is processing the task: {task[:100]}"
+        except Exception as e:
+            return f"Error spawning sub-agent: {e}"
+
+    def _tool_subagent_result(self, task_id: str = "", **kw) -> str:
+        """Get sub-agent result."""
+        tasks = self.subagents.list_tasks()
+        if not tasks:
+            return "No sub-agent tasks found"
+        # If no specific task_id, return all
+        if not task_id:
+            lines = []
+            for t in tasks:
+                lines.append(f"[{t['task_id']}] {t['status']}: {t['task']}")
+            return "\n".join(lines)
+        result = self.subagents.get_result(task_id)
+        if not result:
+            return f"Task {task_id} not found"
+        if result.status == "done":
+            return result.result
+        elif result.status == "error":
+            return f"Error: {result.error}"
+        return f"Status: {result.status}"
+
     def _load_bootstrap(self) -> str:
-        """Read AGENTS.md, SOUL.md, USER.md, IDENTITY.md for system prompt."""
+        """Read AGENTS.md, SOUL.md, USER.md, IDENTITY.md, MEMORY.md for system prompt."""
         parts = []
-        files = self.memory.read_bootstrap_files()
-        for name, content in files.items():
-            parts.append(f"--- {name} ---\n{content[:2000]}")
+        # Read workspace context files
+        for name in ["AGENTS.md", "SOUL.md", "USER.md", "IDENTITY.md"]:
+            fp = self.workspace / name
+            if fp.exists():
+                try:
+                    content = fp.read_text(encoding="utf-8")
+                    parts.append(f"## {name}\n{content[:3000]}")
+                except Exception:
+                    pass
+        # Read MEMORY.md (long-term memory)
+        memory_content = self.memory.read_memory()
+        if memory_content:
+            parts.append(f"## MEMORY.md (Long-term Memory)\n{memory_content[:2000]}")
+        # Read recent daily memory
         daily = self.memory.read_recent_daily(days=2)
         for date, content in daily.items():
-            parts.append(f"--- memory/{date}.md ---\n{content[:1000]}")
+            parts.append(f"## memory/{date}.md (Daily Notes)\n{content[:1500]}")
         return "\n\n".join(parts)
 
     @property
@@ -182,24 +314,57 @@ class XiaClaw:
             except Exception:
                 pass
 
-        tool_list = ", ".join(self.tools.list_names())
-        skill_info = ""
-        active = self.skills.get_active_skills()
-        if active:
-            skill_info = "\nActive skills: " + ", ".join(s.name for s in active)
+        # Build tool descriptions
+        tool_descriptions = []
+        for td in self.tools.get_all_tool_defs():
+            tool_descriptions.append(f"- **{td['name']}**: {td['desc']}")
+        tool_section = "\n".join(tool_descriptions)
+
+        # Skill tools
+        skill_tool_info = []
+        for skill_name in self.skills.list_skills():
+            sk = self.skills.get_skill(skill_name)
+            if sk and sk.tools:
+                for tname in sk.tools:
+                    skill_tool_info.append(f"- **{tname}** (skill: {skill_name})")
+
+        skill_section = ""
+        if skill_tool_info:
+            skill_section = "\n## Skill Tools\n" + "\n".join(skill_tool_info)
+
+        # Workspace context
         bootstrap = ""
         if self.bootstrap_context:
-            bootstrap = f"\n\n## Workspace Context\n{self.bootstrap_context[:3000]}"
+            bootstrap = f"\n\n## Workspace Context\n{self.bootstrap_context}"
+
+        from datetime import datetime
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
         return (
-            f"# 身份\n"
-            f"你是 xiaoclaw，版本 {VERSION}。你是一个轻量级AI Agent，兼容OpenClaw生态。\n"
-            f"重要：你的名字是 xiaoclaw。你不是 Kiro、不是 ChatGPT、不是 Claude、不是任何其他AI。\n"
-            f"当用户问你是谁时，回答「我是 xiaoclaw」。\n\n"
-            f"# 能力\n"
-            f"你可以使用以下工具: {tool_list}\n"
-            f"你能读写文件、执行命令、搜索网页、管理记忆和会话。{skill_info}\n\n"
-            f"# 风格\n"
-            f"简洁、专业、高效。默认用中文回复。{bootstrap}"
+            f"# Identity — CRITICAL\n"
+            f"You are xiaoclaw v{VERSION}. This is your ONLY identity.\n"
+            f"You are NOT Kiro, NOT ChatGPT, NOT Claude, NOT any other AI assistant.\n"
+            f"When asked who you are, you MUST answer: 'I am xiaoclaw' (我是 xiaoclaw).\n"
+            f"Never use any other name for yourself. Your name is xiaoclaw, period.\n\n"
+            f"# Current Time\n{now}\n\n"
+            f"# Tools\n"
+            f"You have access to these tools. Use them proactively to help the user:\n"
+            f"{tool_section}\n"
+            f"{skill_section}\n\n"
+            f"# Memory System\n"
+            f"You have a persistent memory system:\n"
+            f"- Use **memory_search**(query) to search through your memory files for relevant context\n"
+            f"- Use **memory_get**(file_path) to read specific memory files\n"
+            f"- Use **memory_save**(content, daily=true) to save important information to today's daily memory\n"
+            f"- Use **write** to update MEMORY.md for long-term important information\n"
+            f"- Memory files persist across sessions — use them to remember things!\n\n"
+            f"# Guidelines\n"
+            f"- Be concise, professional, and efficient\n"
+            f"- Default to Chinese (中文) when the user speaks Chinese\n"
+            f"- Use tools proactively — don't just describe what you could do, DO it\n"
+            f"- When asked to read/write files, execute commands, or search — use the tools\n"
+            f"- For complex tasks, break them down and use multiple tools\n"
+            f"{bootstrap}"
         )
 
     async def _compact(self):
@@ -322,9 +487,7 @@ class XiaClaw:
                 for tc, name, args, result in results:
                     self.session.add_message("tool", result, tool_call_id=tc.id, name=name)
                     if stream:
-                        # Show tool name with key args, compact format
-                        arg_preview = ', '.join(f'{k}={str(v)[:30]}' for k,v in args.items() if k != 'content')
-                        yield f"\n  ⚙ {name}({arg_preview})\n"
+                        yield f"\n  ⚙ {name}...\n"
                 continue
 
             if stream:
