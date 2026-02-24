@@ -16,6 +16,7 @@ from .skills import SkillRegistry, register_builtin_skills
 from .tools import ToolRegistry, TOOL_DEFS
 from .plugins import PluginManager
 from .subagent import SubagentManager
+from .battle import BattleToolWrapper, PRESET_ROLES, list_preset_roles
 from .utils import SecurityManager, RateLimiter, TokenStats, HookManager
 
 logging.basicConfig(level=logging.WARNING, format='%(message)s')
@@ -102,6 +103,8 @@ def _friendly_tool_display(name: str, args: dict) -> str:
         "list_dir": lambda a: f'⚙ 列出目录: {a.get("path", ".")}...',
         "find_files": lambda a: f'⚙ 查找文件: {a.get("pattern", "")}...',
         "grep": lambda a: f'⚙ 搜索内容: "{a.get("pattern", "")}"...',
+        "battle": lambda a: f'🏢 多角色辩论: "{a.get("question", "")[:40]}"...',
+        "battle_custom": lambda a: f'🏢 自定义角色辩论: "{a.get("question", "")[:40]}"...',
     }
     formatter = display_map.get(name)
     if formatter:
@@ -254,6 +257,36 @@ class XiaClaw:
                 params = skill_tool_params.get(tool_name, _auto_params(func))
                 desc = skill_tool_descs.get(tool_name, _auto_desc(func, tool_name))
                 self.tools.register_tool(tool_name, func, desc, params)
+
+        # Register battle tools
+        if self.providers.active and self.providers.active.ready:
+            self._battle_wrapper = BattleToolWrapper(self.providers.active)
+            self.tools.register_tool(
+                "battle",
+                self._battle_wrapper.battle,
+                "多角色辩论：多个角色（CEO/CTO/开发/QA等）针对同一问题各自给出观点，最后汇总结论。用于多角度分析问题。",
+                {
+                    "type": "object",
+                    "properties": {
+                        "question": {"type": "string", "description": "要辩论的问题"},
+                        "roles": {"type": "string", "description": "角色列表，逗号分隔，如 ceo,cto,dev,qa。可选: ceo,cto,pm,dev,qa,security,designer,devil。留空用默认组合"},
+                    },
+                    "required": ["question"]
+                }
+            )
+            self.tools.register_tool(
+                "battle_custom",
+                self._battle_wrapper.battle_custom,
+                "自定义角色辩论：用自定义角色进行多角度分析",
+                {
+                    "type": "object",
+                    "properties": {
+                        "question": {"type": "string", "description": "要辩论的问题"},
+                        "roles_json": {"type": "string", "description": 'JSON数组，如 [{"name":"投资人","prompt":"从投资回报角度分析"},{"name":"用户","prompt":"从普通用户角度分析"}]'},
+                    },
+                    "required": ["question", "roles_json"]
+                }
+            )
 
         # Register sub-agent tool
         self.tools.register_tool(
@@ -455,6 +488,12 @@ class XiaClaw:
             f"- Use **memory_save**(content, daily=true) to save important information to today's daily memory\n"
             f"- Use **write** to update MEMORY.md for long-term important information\n"
             f"- Memory files persist across sessions — use them to remember things!\n\n"
+            f"# 🏢 多角色Battle系统\n"
+            f"你有一个强大的多角色辩论系统，可以从多个角度分析问题：\n"
+            f"- **battle**(question, roles): 用预设角色辩论。角色: ceo,cto,pm,dev,qa,security,designer,devil\n"
+            f"- **battle_custom**(question, roles_json): 用自定义角色辩论\n"
+            f"- 当用户要求多角度分析、辩论、或需要全面评估时，主动使用battle工具\n"
+            f"- 当用户说'battle'、'辩论'、'多角度'、'各方观点'时，使用battle工具\n\n"
             f"# Guidelines\n"
             f"- Be concise, professional, and efficient\n"
             f"- Default to Chinese (中文) when the user speaks Chinese\n"
