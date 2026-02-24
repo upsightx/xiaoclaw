@@ -1,4 +1,4 @@
-"""XiaClaw CLI entry point - resolves RuntimeWarning for python -m xiaoclaw.core"""
+"""xiaoclaw CLI entry point - resolves RuntimeWarning for python -m xiaoclaw.core"""
 from .core import main
 import asyncio
 
