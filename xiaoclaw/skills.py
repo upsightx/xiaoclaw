@@ -213,7 +213,21 @@ def register_builtin_skills(registry: SkillRegistry):
             return str(eval(expression))
         return "Error: Invalid expression"
 
+    def get_time(timezone: str = "", **kw) -> str:
+        """Get current date/time, optionally in a specific timezone."""
+        from datetime import datetime, timezone as tz, timedelta
+        if timezone:
+            # Simple offset parsing: UTC+8, UTC-5, etc.
+            m = re.match(r'UTC([+-]\d+)', timezone.upper())
+            if m:
+                offset = int(m.group(1))
+                now = datetime.now(tz(timedelta(hours=offset)))
+                return now.strftime(f"%Y-%m-%d %H:%M:%S (UTC{'+' if offset >= 0 else ''}{offset})")
+        from datetime import datetime as dt
+        return dt.now().strftime("%Y-%m-%d %H:%M:%S (local)")
+
     registry.register(create_skill("calculator", "Basic calculator", {"calc": calc}))
+    registry.register(create_skill("datetime", "Date/time utilities", {"get_time": get_time}))
 
 
 def test_skills():

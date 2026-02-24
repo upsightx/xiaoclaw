@@ -5,7 +5,6 @@ import re
 import json
 import asyncio
 import logging
-import subprocess
 from pathlib import Path
 from typing import Dict, Any, Optional, List, Callable
 from dataclasses import dataclass, field
@@ -14,7 +13,7 @@ from .providers import ProviderManager, ProviderConfig
 from .session import Session, SessionManager, count_messages_tokens
 from .memory import MemoryManager
 from .skills import SkillRegistry, register_builtin_skills
-from .web import web_search as _web_search, web_fetch as _web_fetch
+from .tools import ToolRegistry, TOOL_DEFS
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(name)s] %(levelname)s %(message)s')
 logger = logging.getLogger("xiaoclaw")
@@ -82,13 +81,32 @@ class XiaClawConfig:
 
 DANGEROUS = ["rm -rf", "dd if=", "mkfs", "> /dev/", "format c:", "del /f"]
 class SecurityManager:
-    def __init__(self, level: str = "strict"):
+    def __init__(self, level: str = "strict", workspace: Path = Path(".")):
         self.level = level
+        self._audit_log = workspace / ".xiaoclaw" / "audit.log"
 
     def is_dangerous(self, action: str) -> bool:
         if self.level == "relaxed":
             return False
-        return any(p in action.lower() for p in DANGEROUS)
+        dangerous = any(p in action.lower() for p in DANGEROUS)
+        if dangerous:
+            self._audit("BLOCKED", action)
+        return dangerous
+
+    def _audit(self, event: str, detail: str):
+        """Append to audit log."""
+        try:
+            self._audit_log.parent.mkdir(parents=True, exist_ok=True)
+            import time as _t
+            ts = _t.strftime("%Y-%m-%d %H:%M:%S")
+            with open(self._audit_log, "a") as f:
+                f.write(f"[{ts}] {event}: {detail[:200]}\n")
+        except Exception:
+            pass
+
+    def log_tool_call(self, tool: str, args: dict):
+        """Log tool invocations for audit."""
+        self._audit("TOOL", f"{tool}({list(args.keys())})")
 
 # ─── Rate Limiter ─────────────────────────────────────
 import time as _time
@@ -164,112 +182,12 @@ class HookManager:
             except Exception as e:
                 logger.error(f"Hook '{event}' error: {e}")
         return None
-# ─── Built-in Tools ──────────────────────────────────
-TOOL_DEFS = [
-    {"name": "read", "desc": "Read a file", "params": {
-        "type": "object", "properties": {"file_path": {"type": "string", "description": "Path to file"}},
-        "required": ["file_path"]}},
-    {"name": "write", "desc": "Write content to a file", "params": {
-        "type": "object", "properties": {"file_path": {"type": "string"}, "content": {"type": "string"}},
-        "required": ["file_path", "content"]}},
-    {"name": "edit", "desc": "Edit a file by replacing text", "params": {
-        "type": "object", "properties": {"file_path": {"type": "string"}, "old_string": {"type": "string"}, "new_string": {"type": "string"}},
-        "required": ["file_path", "old_string", "new_string"]}},
-    {"name": "exec", "desc": "Run a shell command", "params": {
-        "type": "object", "properties": {"command": {"type": "string", "description": "Shell command"}},
-        "required": ["command"]}},
-    {"name": "web_search", "desc": "Search the web", "params": {
-        "type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}},
-    {"name": "web_fetch", "desc": "Fetch URL content", "params": {
-        "type": "object", "properties": {"url": {"type": "string"}}, "required": ["url"]}},
-    {"name": "memory_search", "desc": "Search memory files", "params": {
-        "type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}},
-    {"name": "memory_get", "desc": "Read memory file lines", "params": {
-        "type": "object", "properties": {"file_path": {"type": "string"}, "start_line": {"type": "integer"}, "end_line": {"type": "integer"}},
-        "required": ["file_path"]}},
-]
-
-class ToolRegistry:
-    def __init__(self, security: SecurityManager, memory: Optional[Any] = None):
-        self.tools: Dict[str, Dict] = {}
-        self.security = security
-        self.memory = memory
-        for n, f, d in [
-            ("read", self._read, "Read file"), ("write", self._write, "Write file"),
-            ("edit", self._edit, "Edit file"), ("exec", self._exec, "Run command"),
-            ("web_search", lambda **kw: _web_search(**kw), "Search web"),
-            ("web_fetch", lambda **kw: _web_fetch(**kw), "Fetch URL"),
-            ("memory_search", self._memory_search, "Search memory"),
-            ("memory_get", self._memory_get, "Get memory"),
-        ]:
-            self.tools[n] = {"func": f, "description": d}
-
-    def get(self, name: str): return self.tools.get(name)
-    def list_names(self) -> List[str]: return list(self.tools.keys())
-
-    def call(self, name: str, args: Dict) -> str:
-        """Execute a tool by name with args dict."""
-        tool = self.tools.get(name)
-        if not tool:
-            return f"Error: unknown tool '{name}'. Available: {', '.join(self.list_names())}"
-        try:
-            return str(tool["func"](**args))
-        except TypeError as e:
-            return f"Error calling {name}: bad arguments — {e}"
-        except PermissionError as e:
-            return f"Error calling {name}: permission denied — {e}"
-        except FileNotFoundError as e:
-            return f"Error calling {name}: file not found — {e}"
-        except Exception as e:
-            return f"Error calling {name}: {type(e).__name__}: {e}"
-
-    def openai_functions(self) -> List[Dict]:
-        """Return OpenAI function-calling tool definitions."""
-        return [{"type": "function", "function": {
-            "name": t["name"], "description": t["desc"], "parameters": t["params"],
-        }} for t in TOOL_DEFS]
-
-    def _read(self, file_path="", path="", **kw) -> str:
-        p = Path(file_path or path).expanduser()
-        if not p.exists(): return f"Error: not found: {p}"
-        try: return p.read_text(encoding="utf-8")[:10000]
-        except Exception as e: return f"Error: {e}"
-
-    def _write(self, file_path="", path="", content="", **kw) -> str:
-        p = Path(file_path or path).expanduser()
-        try: p.parent.mkdir(parents=True, exist_ok=True); p.write_text(content, encoding="utf-8"); return f"Written: {p}"
-        except Exception as e: return f"Error: {e}"
-
-    def _edit(self, file_path="", path="", old_string="", new_string="", **kw) -> str:
-        p = Path(file_path or path).expanduser()
-        if not p.exists(): return f"Error: not found: {p}"
-        text = p.read_text(encoding="utf-8")
-        if old_string not in text: return "Error: old_string not found"
-        p.write_text(text.replace(old_string, new_string, 1), encoding="utf-8"); return f"Edited: {p}"
-
-    def _exec(self, command="", **kw) -> str:
-        if self.security.is_dangerous(command): return f"Blocked: {command}"
-        try:
-            r = subprocess.run(command, shell=True, capture_output=True, text=True, timeout=30)
-            return ((r.stdout + r.stderr).strip() or "(no output)")[:5000]
-        except subprocess.TimeoutExpired: return "Error: timeout"
-        except Exception as e: return f"Error: {e}"
-
-    def _memory_search(self, query="", **kw) -> str:
-        if not self.memory: return "Error: memory not configured"
-        results = self.memory.memory_search(query)
-        if not results: return "No results found"
-        return "\n".join(f"[{r['file']}:{r['line']}] {r['content']}" for r in results[:5])
-
-    def _memory_get(self, file_path="", start_line=1, end_line=0, **kw) -> str:
-        if not self.memory: return "Error: memory not configured"
-        return self.memory.memory_get(file_path, int(start_line), int(end_line))
 # ─── xiaoclaw Core ────────────────────────────────────
 class XiaClaw:
     def __init__(self, config: Optional[XiaClawConfig] = None):
         self.config = config or XiaClawConfig.from_env()
         self.workspace = Path(self.config.workspace)
-        self.security = SecurityManager(self.config.security_level)
+        self.security = SecurityManager(self.config.security_level, self.workspace)
         self.rate_limiter = RateLimiter()
         self.stats = TokenStats()
         self.memory = MemoryManager(self.workspace)
@@ -312,6 +230,17 @@ class XiaClaw:
         return "\n\n".join(parts)
 
     def _system_prompt(self) -> str:
+        # Check for custom template
+        template_file = self.workspace / ".xiaoclaw" / "prompt.txt"
+        if template_file.exists():
+            try:
+                tmpl = template_file.read_text(encoding="utf-8")
+                return tmpl.replace("{{version}}", VERSION).replace(
+                    "{{tools}}", ", ".join(self.tools.list_names())
+                ).replace("{{bootstrap}}", self._bootstrap_context[:3000])
+            except Exception:
+                pass
+
         tool_list = ", ".join(self.tools.list_names())
         skill_info = ""
         active = self.skills.get_active_skills()
@@ -327,16 +256,14 @@ class XiaClaw:
         )
 
     async def _compact(self):
-        """Compress old messages when exceeding token threshold."""
+        """Compress old messages when exceeding token threshold. Uses LLM summary if available."""
         tokens = count_messages_tokens(self.session.messages)
         if tokens < self.config.compaction_threshold:
             return
 
         logger.info(f"Compacting: {tokens} tokens > {self.config.compaction_threshold}")
-        # Flush important info before compaction
         self.memory.flush_important(self.session.messages)
 
-        # Keep system-relevant messages and recent ones
         n = len(self.session.messages)
         if n <= 4:
             return
@@ -344,19 +271,46 @@ class XiaClaw:
         old_msgs = self.session.messages[:n - 4]
         recent = self.session.messages[n - 4:]
 
-        # Summarize old messages
-        summary_text = []
-        for m in old_msgs:
-            c = m.get("content", "")
-            if isinstance(c, str) and c.strip():
-                summary_text.append(f"{m['role']}: {c[:100]}")
-        summary = "[Compacted conversation summary]\n" + "\n".join(summary_text[-10:])
+        # Try LLM-based summary
+        summary = await self._llm_summarize(old_msgs)
+        if not summary:
+            # Fallback: simple truncation
+            summary_text = []
+            for m in old_msgs:
+                c = m.get("content", "")
+                if isinstance(c, str) and c.strip():
+                    summary_text.append(f"{m['role']}: {c[:100]}")
+            summary = "[Compacted]\n" + "\n".join(summary_text[-10:])
 
         self.session.messages = [
             {"role": "system", "content": summary, "ts": 0}
         ] + recent
         self.session.save()
         logger.info(f"Compacted to {len(self.session.messages)} messages")
+
+    async def _llm_summarize(self, messages: list) -> str:
+        """Use LLM to summarize old messages for compaction."""
+        if not (self.providers.active and self.providers.active.ready):
+            return ""
+        try:
+            text = "\n".join(
+                f"{m['role']}: {m.get('content', '')[:200]}"
+                for m in messages if isinstance(m.get('content'), str) and m['content'].strip()
+            )[:3000]
+            resp = await self.providers.active.client.chat.completions.create(
+                model=self.providers.active.current_model,
+                messages=[
+                    {"role": "system", "content": "Summarize this conversation concisely. Keep key facts, decisions, and context. Output in the same language as the conversation."},
+                    {"role": "user", "content": text},
+                ],
+                max_tokens=500,
+            )
+            summary = resp.choices[0].message.content or ""
+            if summary:
+                return f"[Conversation Summary]\n{summary}"
+        except Exception as e:
+            logger.warning(f"LLM summarize failed: {e}")
+        return ""
 
     async def _llm_call_with_retry(self, client, model, messages, **kwargs):
         """LLM call with exponential backoff retry. Returns response or raises."""
@@ -408,6 +362,7 @@ class XiaClaw:
                     except json.JSONDecodeError: args = {}
 
                     await self.hooks.fire("before_tool_call", tool=name, args=args)
+                    self.security.log_tool_call(name, args)
                     result = self.tools.call(name, args)
                     self.stats.record_tool()
                     await self.hooks.fire("after_tool_call", tool=name, args=args, result=result)
@@ -486,3 +441,20 @@ class XiaClaw:
         if "工具" in message or "tools" in message.lower():
             return f"工具: {', '.join(self.tools.list_names())}"
         return f"[无LLM] 收到: {message[:100]}"
+
+    def health_check(self) -> Dict[str, Any]:
+        """Return health status for monitoring."""
+        p = self.providers.active
+        return {
+            "status": "ok",
+            "version": VERSION,
+            "model": p.current_model if p else None,
+            "provider_ready": bool(p and p.ready),
+            "session_id": self.session.session_id,
+            "message_count": len(self.session.messages),
+            "stats": {
+                "total_tokens": self.stats.total_tokens,
+                "requests": self.stats.requests,
+                "tool_calls": self.stats.tool_calls,
+            },
+        }
