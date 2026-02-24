@@ -8,4 +8,4 @@ COPY . .
 ENV PYTHONUNBUFFERED=1
 ENV XIAOCLAW_SECURITY=strict
 
-CMD ["python", "-m", "xiaoclaw.core"]
+CMD ["python", "-m", "xiaoclaw"]
