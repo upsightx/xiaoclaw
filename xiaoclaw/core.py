@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""XiaClaw - Lightweight AI Agent compatible with OpenClaw ecosystem"""
+"""xiaoclaw - Lightweight AI Agent compatible with OpenClaw ecosystem"""
 import os
 import re
 import json
@@ -16,7 +16,7 @@ from .memory import MemoryManager
 from .skills import SkillRegistry, register_builtin_skills
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(name)s] %(levelname)s %(message)s')
-logger = logging.getLogger("XiaClaw")
+logger = logging.getLogger("xiaoclaw")
 
 VERSION = "0.2.0"
 
@@ -77,22 +77,63 @@ class HookManager:
                 logger.error(f"Hook '{event}' error: {e}")
         return None
 # ─── Built-in Tools ──────────────────────────────────
+TOOL_DEFS = [
+    {"name": "read", "desc": "Read a file", "params": {
+        "type": "object", "properties": {"file_path": {"type": "string", "description": "Path to file"}},
+        "required": ["file_path"]}},
+    {"name": "write", "desc": "Write content to a file", "params": {
+        "type": "object", "properties": {"file_path": {"type": "string"}, "content": {"type": "string"}},
+        "required": ["file_path", "content"]}},
+    {"name": "edit", "desc": "Edit a file by replacing text", "params": {
+        "type": "object", "properties": {"file_path": {"type": "string"}, "old_string": {"type": "string"}, "new_string": {"type": "string"}},
+        "required": ["file_path", "old_string", "new_string"]}},
+    {"name": "exec", "desc": "Run a shell command", "params": {
+        "type": "object", "properties": {"command": {"type": "string", "description": "Shell command"}},
+        "required": ["command"]}},
+    {"name": "web_search", "desc": "Search the web", "params": {
+        "type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}},
+    {"name": "web_fetch", "desc": "Fetch URL content", "params": {
+        "type": "object", "properties": {"url": {"type": "string"}}, "required": ["url"]}},
+    {"name": "memory_search", "desc": "Search memory files", "params": {
+        "type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}},
+    {"name": "memory_get", "desc": "Read memory file lines", "params": {
+        "type": "object", "properties": {"file_path": {"type": "string"}, "start_line": {"type": "integer"}, "end_line": {"type": "integer"}},
+        "required": ["file_path"]}},
+]
+
 class ToolRegistry:
-    def __init__(self, security: SecurityManager):
+    def __init__(self, security: SecurityManager, memory: Optional[Any] = None):
         self.tools: Dict[str, Dict] = {}
         self.security = security
+        self.memory = memory
         for n, f, d in [
             ("read", self._read, "Read file"), ("write", self._write, "Write file"),
             ("edit", self._edit, "Edit file"), ("exec", self._exec, "Run command"),
-            ("web_search", lambda **kw: f"[stub] {kw}", "Search web"),
-            ("web_fetch", lambda **kw: f"[stub] {kw}", "Fetch URL"),
-            ("memory_search", lambda **kw: "", "Search memory"),
-            ("memory_get", lambda **kw: "", "Get memory"),
+            ("web_search", lambda **kw: f"[stub] search: {kw.get('query','')}", "Search web"),
+            ("web_fetch", lambda **kw: f"[stub] fetch: {kw.get('url','')}", "Fetch URL"),
+            ("memory_search", self._memory_search, "Search memory"),
+            ("memory_get", self._memory_get, "Get memory"),
         ]:
             self.tools[n] = {"func": f, "description": d}
 
     def get(self, name: str): return self.tools.get(name)
     def list_names(self) -> List[str]: return list(self.tools.keys())
+
+    def call(self, name: str, args: Dict) -> str:
+        """Execute a tool by name with args dict."""
+        tool = self.tools.get(name)
+        if not tool:
+            return f"Error: unknown tool '{name}'"
+        try:
+            return str(tool["func"](**args))
+        except Exception as e:
+            return f"Error calling {name}: {e}"
+
+    def openai_functions(self) -> List[Dict]:
+        """Return OpenAI function-calling tool definitions."""
+        return [{"type": "function", "function": {
+            "name": t["name"], "description": t["desc"], "parameters": t["params"],
+        }} for t in TOOL_DEFS]
 
     def _read(self, file_path="", path="", **kw) -> str:
         p = Path(file_path or path).expanduser()
@@ -119,15 +160,25 @@ class ToolRegistry:
             return ((r.stdout + r.stderr).strip() or "(no output)")[:5000]
         except subprocess.TimeoutExpired: return "Error: timeout"
         except Exception as e: return f"Error: {e}"
-# ─── XiaClaw Core ────────────────────────────────────
+
+    def _memory_search(self, query="", **kw) -> str:
+        if not self.memory: return "Error: memory not configured"
+        results = self.memory.memory_search(query)
+        if not results: return "No results found"
+        return "\n".join(f"[{r['file']}:{r['line']}] {r['content']}" for r in results[:5])
+
+    def _memory_get(self, file_path="", start_line=1, end_line=0, **kw) -> str:
+        if not self.memory: return "Error: memory not configured"
+        return self.memory.memory_get(file_path, int(start_line), int(end_line))
+# ─── xiaoclaw Core ────────────────────────────────────
 class XiaClaw:
     def __init__(self, config: Optional[XiaClawConfig] = None):
         self.config = config or XiaClawConfig.from_env()
         self.workspace = Path(self.config.workspace)
         self.security = SecurityManager(self.config.security_level)
-        self.tools = ToolRegistry(self.security)
-        self.hooks = HookManager()
         self.memory = MemoryManager(self.workspace)
+        self.tools = ToolRegistry(self.security, memory=self.memory)
+        self.hooks = HookManager()
         self.session_mgr = SessionManager(self.workspace / ".xiaoclaw" / "sessions")
         self.session = self.session_mgr.new_session()
 
@@ -150,7 +201,7 @@ class XiaClaw:
 
         # Bootstrap system prompt from workspace files
         self._bootstrap_context = self._load_bootstrap()
-        logger.info(f"XiaClaw v{VERSION} ready | model={self.config.default_model}")
+        logger.info(f"xiaoclaw v{VERSION} ready | model={self.config.default_model}")
 
     def _load_bootstrap(self) -> str:
         """Read AGENTS.md, SOUL.md, USER.md, IDENTITY.md for system prompt."""
@@ -174,7 +225,7 @@ class XiaClaw:
         if self._bootstrap_context:
             bootstrap = f"\n\n## Workspace Context\n{self._bootstrap_context[:3000]}"
         return (
-            f"你是 XiaClaw v{VERSION}，一个兼容OpenClaw生态的轻量级AI Agent。\n"
+            f"你是 xiaoclaw v{VERSION}，一个兼容OpenClaw生态的轻量级AI Agent。\n"
             f"工具: {tool_list}{skill_info}\n"
             f"保持简洁、专业、高效。{bootstrap}"
         )
@@ -212,38 +263,73 @@ class XiaClaw:
         logger.info(f"Compacted to {len(self.session.messages)} messages")
 
     async def handle_message(self, message: str) -> str:
-        """Process a user message and return response."""
-        # Fire hook
+        """Process a user message through the agent loop with tool calling."""
         await self.hooks.fire("message_received", message=message)
-
-        # Auto-activate skills
         self.skills.activate_for_message(message)
-
-        # Add to session
         self.session.add_message("user", message)
-
-        # Check compaction
         await self._compact()
 
-        # Get context window
-        ctx = self.session.get_context_window(self.config.max_context_tokens)
+        if not (self.providers.active and self.providers.active.ready):
+            return self._fallback(message)
 
-        # Call LLM
-        if self.providers.active and self.providers.active.ready:
-            sys_prompt = self._system_prompt()
+        sys_prompt = self._system_prompt()
+        max_rounds = 10  # prevent infinite loops
+
+        for _ in range(max_rounds):
+            ctx = self.session.get_context_window(self.config.max_context_tokens)
             all_msgs = [{"role": "system", "content": sys_prompt}] + ctx
-            response = await self.providers.chat(all_msgs, max_tokens=2000)
-            if response:
-                response = re.sub(r'<think>.*?</think>\s*', '', response, flags=re.DOTALL).strip()
-                self.session.add_message("assistant", response)
-                return response
 
-        # Fallback without LLM
-        return self._fallback(message)
+            try:
+                resp = await self.providers.active.client.chat.completions.create(
+                    model=self.providers.active.current_model,
+                    messages=all_msgs,
+                    tools=self.tools.openai_functions(),
+                    max_tokens=2000,
+                )
+            except Exception as e:
+                logger.error(f"LLM error: {e}")
+                return f"[LLM Error: {e}]"
+
+            choice = resp.choices[0]
+
+            # If model wants to call tools
+            if choice.message.tool_calls:
+                # Store assistant message with tool_calls
+                tc_msg = {"role": "assistant", "content": choice.message.content or "",
+                          "tool_calls": [{"id": tc.id, "type": "function",
+                                          "function": {"name": tc.function.name, "arguments": tc.function.arguments}}
+                                         for tc in choice.message.tool_calls]}
+                self.session.add_message(**tc_msg)
+
+                # Execute each tool call
+                for tc in choice.message.tool_calls:
+                    name = tc.function.name
+                    try:
+                        args = json.loads(tc.function.arguments)
+                    except json.JSONDecodeError:
+                        args = {}
+
+                    await self.hooks.fire("before_tool_call", tool=name, args=args)
+                    result = self.tools.call(name, args)
+                    await self.hooks.fire("after_tool_call", tool=name, args=args, result=result)
+
+                    logger.info(f"Tool: {name}({list(args.keys())}) → {len(result)} chars")
+                    self.session.add_message("tool", result, tool_call_id=tc.id, name=name)
+
+                continue  # next round — let LLM see tool results
+
+            # No tool calls — final text response
+            text = choice.message.content or ""
+            text = re.sub(r'<think>.*?</think>\s*', '', text, flags=re.DOTALL).strip()
+            if text:
+                self.session.add_message("assistant", text)
+            return text
+
+        return "[Agent loop exceeded max rounds]"
 
     def _fallback(self, message: str) -> str:
         if "你好" in message or "hello" in message.lower():
-            return f"你好！我是 XiaClaw v{VERSION}。配置 OPENAI_API_KEY 后可智能对话。"
+            return f"你好！我是 xiaoclaw v{VERSION}。配置 OPENAI_API_KEY 后可智能对话。"
         if "工具" in message or "tools" in message.lower():
             return f"工具: {', '.join(self.tools.list_names())}"
         return f"[无LLM] 收到: {message[:100]}"
@@ -255,7 +341,7 @@ async def main():
     config = XiaClawConfig.from_env()
     claw = XiaClaw(config)
     p = claw.providers.active
-    print(f"\n  XiaClaw v{VERSION} | {p.current_model if p else 'no LLM'} | session={claw.session.session_id}\n")
+    print(f"\n  xiaoclaw v{VERSION} | {p.current_model if p else 'no LLM'} | session={claw.session.session_id}\n")
 
     if "--test" in sys.argv:
         print("--- Self Test ---")
@@ -291,7 +377,7 @@ async def main():
         if cmd == "/sessions":
             for s in claw.session_mgr.list_sessions(): print(f"  {s['session_id']} ({s['size']}B)")
             continue
-        print(f"\n🐾 XiaClaw: {await claw.handle_message(user_input)}")
+        print(f"\n🐾 xiaoclaw: {await claw.handle_message(user_input)}")
 
 if __name__ == "__main__":
     asyncio.run(main())
