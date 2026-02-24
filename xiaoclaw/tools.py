@@ -142,11 +142,7 @@ class ToolRegistry:
     def _read(self, file_path="", path="", **kw) -> str:
         p = Path(file_path or path).expanduser()
         if not p.exists(): return f"Error: not found: {p}"
-        try:
-            text = p.read_text(encoding="utf-8")
-            if len(text) > 8000:
-                return text[:8000] + f"\n... [truncated, {len(text)} chars total]"
-            return text
+        try: return p.read_text(encoding="utf-8")
         except Exception as e: return f"Error: {e}"
 
     def _write(self, file_path="", path="", content="", **kw) -> str:
