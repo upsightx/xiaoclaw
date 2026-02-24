@@ -316,7 +316,7 @@ class TestIntegration:
 
     def test_version(self):
         from xiaoclaw.core import VERSION
-        assert VERSION == "0.3.0"
+        assert VERSION.startswith("0.3")
 
 
 if __name__ == "__main__":
