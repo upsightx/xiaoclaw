@@ -26,11 +26,22 @@ async def main():
                 logging.getLogger().setLevel(getattr(logging, lvl))
 
     config = XiaClawConfig.from_yaml(config_path) if config_path else XiaClawConfig.from_env()
+
+    # Quiet mode by default, --debug for verbose
+    if "--debug" in sys.argv:
+        logging.getLogger().setLevel(logging.DEBUG)
+        logging.getLogger("xiaoclaw").setLevel(logging.DEBUG)
+        logging.getLogger("httpx").setLevel(logging.INFO)
+
     claw = XiaClaw(config)
     p = claw.providers.active
-    print(f"\n  xiaoclaw v{VERSION} | {p.current_model if p else 'no LLM'} | session={claw.session.session_id}\n")
+    model_name = p.current_model if p else 'no LLM'
+    ready = "✓" if (p and p.ready) else "✗"
+    print(f"\n  🐾 xiaoclaw v{VERSION} | {model_name} {ready}\n")
 
     if "--test" in sys.argv:
+        logging.getLogger().setLevel(logging.INFO)
+        logging.getLogger("xiaoclaw").setLevel(logging.INFO)
         print("--- Self Test ---")
         from .providers import test_providers; test_providers()
         from .session import test_session; test_session()
