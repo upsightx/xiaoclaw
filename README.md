@@ -2,7 +2,7 @@
 
 Lightweight AI Agent — OpenClaw-compatible, minimal core, security first.
 
-## v0.3.0 特性
+## v0.3.1 特性
 
 ### 核心
 - 🤖 **多Provider** — 支持多个LLM provider，运行时切换，自动failover
