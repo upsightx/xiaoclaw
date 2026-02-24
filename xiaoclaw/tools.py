@@ -3,6 +3,7 @@ import os
 import subprocess
 import fnmatch
 import re
+import json
 from pathlib import Path
 from typing import Dict, Any, Optional, List, Callable
 
@@ -45,16 +46,36 @@ TOOL_DEFS = [
     {"name": "grep", "desc": "Search file contents for a pattern (regex supported)", "params": {
         "type": "object", "properties": {"pattern": {"type": "string", "description": "Search pattern (regex)"}, "path": {"type": "string", "description": "File or directory to search"}, "max_results": {"type": "integer", "description": "Max results (default: 20)"}},
         "required": ["pattern"]}},
+    {"name": "clawhub_search", "desc": "Search ClawHub for available skills to install. Use when you need a capability you don't have.", "params": {
+        "type": "object", "properties": {"query": {"type": "string", "description": "Search keywords, e.g. 'weather', 'github', 'email'"}},
+        "required": ["query"]}},
+    {"name": "clawhub_install", "desc": "Install a skill from ClawHub by its slug name. After install, the skill's tools become available.", "params": {
+        "type": "object", "properties": {"slug": {"type": "string", "description": "Skill slug from clawhub search results, e.g. 'weather', 'google-weather'"}},
+        "required": ["slug"]}},
+    {"name": "clawhub_list", "desc": "List all installed ClawHub skills", "params": {
+        "type": "object", "properties": {}, "required": []}},
+    {"name": "create_skill", "desc": "Create a new custom skill with code. Use when ClawHub doesn't have what you need.", "params": {
+        "type": "object", "properties": {
+            "name": {"type": "string", "description": "Skill name (lowercase, no spaces, e.g. 'ip-lookup')"},
+            "description": {"type": "string", "description": "What the skill does"},
+            "tool_name": {"type": "string", "description": "Name of the tool function to expose"},
+            "tool_description": {"type": "string", "description": "Description of the tool function"},
+            "tool_params": {"type": "string", "description": "JSON string of parameter definitions, e.g. '{\"ip\": {\"type\": \"string\", \"description\": \"IP address\"}}'"},
+            "code": {"type": "string", "description": "Python code for skill.py. Must define a function matching tool_name that accepts keyword args and returns a string."}
+        },
+        "required": ["name", "description", "tool_name", "code"]}},
 ]
 
 
 class ToolRegistry:
-    def __init__(self, security, memory=None):
+    def __init__(self, security, memory=None, skills_registry=None):
         self.tools: Dict[str, Dict] = {}
         self.security = security
         self.memory = memory
+        self.skills_registry = skills_registry
         self._disabled: set = set()
         self._extra_tool_defs: List[Dict] = []  # for skill tools
+        self._skills_dir: Optional[Path] = None
         for n, f, d in [
             ("read", self._read, "Read file"),
             ("write", self._write, "Write file"),
@@ -68,6 +89,10 @@ class ToolRegistry:
             ("list_dir", self._list_dir, "List directory"),
             ("find_files", self._find_files, "Find files"),
             ("grep", self._grep, "Search file contents"),
+            ("clawhub_search", self._clawhub_search, "Search ClawHub"),
+            ("clawhub_install", self._clawhub_install, "Install from ClawHub"),
+            ("clawhub_list", self._clawhub_list, "List ClawHub skills"),
+            ("create_skill", self._create_skill, "Create custom skill"),
         ]:
             self.tools[n] = {"func": f, "description": d}
 
@@ -244,3 +269,155 @@ class ToolRegistry:
                         _search_file(fp)
 
         return "\n".join(results) if results else f"No matches for '{pattern}'"
+
+    # ─── ClawHub Integration ─────────────────────────────
+
+    def _get_skills_dir(self) -> Path:
+        """Get the skills directory path."""
+        if self._skills_dir:
+            return self._skills_dir
+        # Default: project root / skills
+        return Path(__file__).parent.parent / "skills"
+
+    def set_skills_dir(self, path: Path):
+        """Set the skills directory for clawhub operations."""
+        self._skills_dir = path
+
+    def _clawhub_search(self, query="", **kw) -> str:
+        """Search ClawHub for skills."""
+        if not query:
+            return "Error: query is required"
+        try:
+            r = subprocess.run(
+                ["clawhub", "search", query],
+                capture_output=True, text=True, timeout=30
+            )
+            output = (r.stdout + r.stderr).strip()
+            if not output:
+                return f"No skills found for '{query}'"
+            # Parse and format results nicely
+            lines = output.split("\n")
+            results = []
+            for line in lines:
+                line = line.strip()
+                if not line or line.startswith("-"):
+                    continue
+                results.append(line)
+            if not results:
+                return f"No skills found for '{query}'"
+            formatted = f"Found {len(results)} skills for '{query}':\n"
+            for r_line in results[:10]:
+                formatted += f"  • {r_line}\n"
+            formatted += "\nUse clawhub_install(slug) to install a skill."
+            return formatted
+        except subprocess.TimeoutExpired:
+            return "Error: clawhub search timed out"
+        except FileNotFoundError:
+            return "Error: clawhub CLI not found. Is it installed?"
+        except Exception as e:
+            return f"Error searching ClawHub: {e}"
+
+    def _clawhub_install(self, slug="", **kw) -> str:
+        """Install a skill from ClawHub."""
+        if not slug:
+            return "Error: slug is required"
+        skills_dir = self._get_skills_dir()
+        skills_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            r = subprocess.run(
+                ["clawhub", "install", slug, "--dir", str(skills_dir), "--no-input"],
+                capture_output=True, text=True, timeout=60
+            )
+            output = (r.stdout + r.stderr).strip()
+            if r.returncode != 0:
+                return f"Install failed: {output}"
+            # Reload skills after install
+            if self.skills_registry:
+                self.skills_registry.reload_skills(skills_dir)
+            return f"✅ Installed skill '{slug}' to {skills_dir}/{slug}\n{output}\nSkills reloaded. New tools may now be available."
+        except subprocess.TimeoutExpired:
+            return "Error: install timed out (60s)"
+        except FileNotFoundError:
+            return "Error: clawhub CLI not found. Is it installed?"
+        except Exception as e:
+            return f"Error installing from ClawHub: {e}"
+
+    def _clawhub_list(self, **kw) -> str:
+        """List installed ClawHub skills."""
+        skills_dir = self._get_skills_dir()
+        try:
+            r = subprocess.run(
+                ["clawhub", "list", "--dir", str(skills_dir)],
+                capture_output=True, text=True, timeout=15
+            )
+            output = (r.stdout + r.stderr).strip()
+            if not output or "No installed" in output:
+                # Also list local skill directories
+                local_skills = []
+                if skills_dir.exists():
+                    for d in sorted(skills_dir.iterdir()):
+                        if d.is_dir() and not d.name.startswith(('_', '.')):
+                            skill_md = d / "SKILL.md"
+                            desc = ""
+                            if skill_md.exists():
+                                first_line = skill_md.read_text(encoding="utf-8").split("\n")[0]
+                                desc = first_line.replace("#", "").strip()
+                            local_skills.append(f"  • {d.name}" + (f" — {desc}" if desc else ""))
+                if local_skills:
+                    return "Local skills:\n" + "\n".join(local_skills)
+                return "No skills installed. Use clawhub_search to find skills."
+            return output
+        except Exception as e:
+            return f"Error listing skills: {e}"
+
+    # ─── Create Skill ────────────────────────────────────
+
+    def _create_skill(self, name="", description="", tool_name="", tool_description="", tool_params="", code="", **kw) -> str:
+        """Create a new custom skill in the skills directory."""
+        if not name or not code:
+            return "Error: name and code are required"
+        if not tool_name:
+            tool_name = name.replace("-", "_")
+        if not tool_description:
+            tool_description = description or f"Custom tool: {tool_name}"
+        if not description:
+            description = f"Custom skill: {name}"
+
+        skills_dir = self._get_skills_dir()
+        skill_dir = skills_dir / name
+        skill_dir.mkdir(parents=True, exist_ok=True)
+
+        # Parse tool_params
+        params_block = ""
+        if tool_params:
+            try:
+                params = json.loads(tool_params) if isinstance(tool_params, str) else tool_params
+                param_lines = []
+                for pname, pdef in params.items():
+                    ptype = pdef.get("type", "string") if isinstance(pdef, dict) else "string"
+                    pdesc = pdef.get("description", "") if isinstance(pdef, dict) else str(pdef)
+                    param_lines.append(f"  - {pname} ({ptype}): {pdesc}")
+                params_block = "\n".join(param_lines)
+            except Exception:
+                params_block = f"  - (see code for parameters)"
+
+        # Create SKILL.md
+        skill_md_content = f"""# {name}
+{description}
+
+## tools
+- {tool_name}: {tool_description}
+
+## parameters
+{params_block if params_block else '  - (see code)'}
+"""
+        (skill_dir / "SKILL.md").write_text(skill_md_content, encoding="utf-8")
+
+        # Create skill.py
+        (skill_dir / "skill.py").write_text(code, encoding="utf-8")
+
+        # Reload skills
+        if self.skills_registry:
+            self.skills_registry.reload_skills(skills_dir)
+
+        return f"✅ Created skill '{name}' at {skill_dir}/\n  - SKILL.md\n  - skill.py\nSkills reloaded. Tool '{tool_name}' should now be available."
