@@ -72,7 +72,7 @@ async def test_core():
 
     # Test 9: Version
     print(f"Test 9: Version = {VERSION}")
-    assert VERSION == "0.3.0"
+    assert VERSION == "0.3.1"
     print("  ✓ Pass\n")
 
     print("=== All Tests Passed! ===")
