@@ -2,6 +2,29 @@
 
 Lightweight AI Agent — OpenClaw-compatible, minimal core, security first.
 
+## 一键安装
+
+无需任何开发经验，复制粘贴一行命令即可完成安装。
+
+**macOS / Linux:**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/upsightx/xiaoclaw/master/install.sh | bash
+```
+
+**Windows (PowerShell):**
+
+```powershell
+irm https://raw.githubusercontent.com/upsightx/xiaoclaw/master/install.ps1 | iex
+```
+
+安装脚本会自动：
+- ✅ 检测并安装 Python 3.10+ 和 Git
+- ✅ 创建独立虚拟环境（不污染系统）
+- ✅ 安装所有依赖
+- ✅ 启动交互式配置向导（选模型、填 API Key）
+- ✅ 生成启动脚本和快捷命令
+
 ## v0.3.1 特性
 
 ### 核心
@@ -45,13 +68,12 @@ Lightweight AI Agent — OpenClaw-compatible, minimal core, security first.
 - 🧪 **36个测试** — pytest + coverage，覆盖所有核心模块
 - 📄 **自动文档** — API文档自动生成 (scripts/gendocs.py)
 
-## 快速开始
+## 手动安装
 
-### Docker（推荐）
+### Docker
 
 ```bash
 git clone https://github.com/upsightx/xiaoclaw.git && cd xiaoclaw
-
 docker build -t xiaoclaw .
 
 # 交互模式
@@ -60,13 +82,6 @@ docker run -it \
   -e OPENAI_BASE_URL=https://api.example.com/v1 \
   -e XIAOCLAW_MODEL=your-model \
   xiaoclaw
-
-# 测试
-docker run --rm -e OPENAI_API_KEY=xxx -e OPENAI_BASE_URL=xxx -e XIAOCLAW_MODEL=xxx \
-  xiaoclaw python -m xiaoclaw --test
-
-# pytest
-docker run --rm xiaoclaw pytest tests/ -v
 ```
 
 ### pip
@@ -153,6 +168,8 @@ def get_skill():
 
 ```
 xiaoclaw/
+├── install.sh              # 一键安装 (macOS/Linux)
+├── install.ps1             # 一键安装 (Windows)
 ├── Dockerfile
 ├── requirements.txt
 ├── pyproject.toml
