@@ -288,7 +288,9 @@ def register_builtin_skills(registry: SkillRegistry):
                     ast.FloorDiv, ast.USub, ast.UAdd, ast.Compare,
                     ast.Eq, ast.NotEq, ast.Lt, ast.LtE, ast.Gt, ast.GtE,
                     ast.BoolOp, ast.And, ast.Or, ast.Not, ast.IfExp,
-                    ast.Call, ast.Name, ast.Attribute, ast.Subscript, ast.Index, ast.Slice)
+                    ast.Call, ast.Name, ast.Attribute, ast.Subscript, ast.Index, ast.Slice,
+                    ast.Load, ast.Store, ast.Del, ast.Starred, ast.FormattedValue,
+                    ast.JoinedStr, ast.keyword)
             for node in ast.walk(tree):
                 if not isinstance(node, SAFE):
                     return f"Error: unsafe expression ({type(node).__name__})"
