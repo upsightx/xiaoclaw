@@ -1,5 +1,6 @@
 """xiaoclaw Provider System - Multi-provider LLM management"""
 import os
+import time
 import logging
 from pathlib import Path
 from typing import Dict, Any, Optional, List
@@ -51,18 +52,46 @@ class Provider:
     def ready(self) -> bool:
         return self.client is not None
 
-    async def chat(self, messages: List[Dict], model: str = "", **kwargs) -> str:
+    async def chat(self, messages: List[Dict], model: str = "", return_stats: bool = False, **kwargs) -> Any:
+        """Chat completion with optional stats return."""
         if not self.client:
-            return "[Provider not configured]"
+            return "[Provider not configured]" if not return_stats else {"content": "[Provider not configured]", "error": True}
         use_model = model or self.current_model
+        start_time = time.time()
         try:
             resp = await self.client.chat.completions.create(
                 model=use_model, messages=messages, **kwargs
             )
-            return resp.choices[0].message.content or ""
+            content = resp.choices[0].message.content or ""
+            duration_ms = (time.time() - start_time) * 1000
+            usage = getattr(resp, 'usage', None)
+            stats = {
+                "content": content,
+                "model": use_model,
+                "provider": self.config.name,
+                "input_tokens": usage.prompt_tokens if usage else 0,
+                "output_tokens": usage.completion_tokens if usage else 0,
+                "total_tokens": usage.total_tokens if usage else 0,
+                "duration_ms": duration_ms,
+                "success": True,
+                "error": None
+            }
+            return stats if return_stats else content
         except Exception as e:
+            duration_ms = (time.time() - start_time) * 1000
             logger.error(f"Provider '{self.config.name}' error: {e}")
-            return f"[LLM Error: {e}]"
+            stats = {
+                "content": f"[LLM Error: {e}]",
+                "model": use_model,
+                "provider": self.config.name,
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "total_tokens": 0,
+                "duration_ms": duration_ms,
+                "success": False,
+                "error": str(e)
+            }
+            return stats if return_stats else f"[LLM Error: {e}]"
 
 
 class ProviderManager:

@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Dict, Any, Optional, List
 from dataclasses import dataclass
 
+from .analytics import Analytics
 from .providers import ProviderManager, ProviderConfig
 from .session import Session, SessionManager, count_messages_tokens
 from .memory import MemoryManager
@@ -129,6 +130,7 @@ class XiaClaw:
         self.rate_limiter = RateLimiter()
         self.stats = TokenStats()
         self.memory = MemoryManager(self.workspace)
+        self.analytics = Analytics()
         self.tools = ToolRegistry(self.security, memory=self.memory, skills_registry=None)  # set after skills init
         self.hooks = HookManager()
         self.session_mgr = SessionManager(self.workspace / ".xiaoclaw" / "sessions")
@@ -631,7 +633,19 @@ class XiaClaw:
                 logger.error(f"LLM error after retries: {e}")
                 yield f"[LLM Error: {e}]"; return
 
-            self.stats.record(getattr(resp, 'usage', None))
+            usage = getattr(resp, 'usage', None)
+                self.stats.record(usage)
+                # Record analytics
+                if usage:
+                    import time
+                    self.analytics.record(
+                        model=self.providers.active.current_model,
+                        provider=self.providers.active_name,
+                        input_tokens=usage.prompt_tokens,
+                        output_tokens=usage.completion_tokens,
+                        duration_ms=0,  # Not tracked in non-streaming
+                        success=True
+                    )
             choice = resp.choices[0]
 
             if choice.message.tool_calls:

@@ -11,6 +11,7 @@ try:
     from fastapi.responses import HTMLResponse, StreamingResponse, JSONResponse
     from fastapi.staticfiles import StaticFiles
     from pydantic import BaseModel
+from dataclasses import asdict
     import json
     HAS_FASTAPI = True
 except ImportError:
@@ -443,6 +444,22 @@ def create_webui(claw=None):
         if req.model:
             claw.config.providers[claw.config.active_provider]["default_model"] = req.model
         return {"status": "ok"}
+
+    @app.get("/api/analytics")
+    async def get_analytics(days: int = 7):
+        """Get analytics for recent days."""
+        return claw.analytics.get_recent_stats(days)
+
+    @app.get("/api/analytics/daily/{date}")
+    async def get_daily_analytics(date: str):
+        """Get analytics for a specific date."""
+        daily = claw.analytics.get_daily_stats(date)
+        return asdict(daily) if daily else {"error": "No data for date"}
+
+    @app.get("/api/analytics/range")
+    async def get_range_analytics(start: str, end: str):
+        """Get analytics for a date range."""
+        return claw.analytics.get_range_stats(start, end)
 
     return app
 

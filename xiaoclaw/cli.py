@@ -27,12 +27,13 @@ SLASH_COMMANDS = {
     "/battle":        "多角色辩论 (/battle <问题>)",
     "/battle-roles":  "查看预设角色",
     "/battle-custom": "自定义角色辩论",
+    "/analytics":     "Token统计分析 (/analytics [天数] 7/30)",
     "/version":       "查看版本",
     "/setup":         "重新运行设置向导",
     "/quit":          "退出",
 }
 ALIASES = {"/q": "/quit", "/h": "/help", "/t": "/tools", "/s": "/sessions",
-           "/m": "/memory", "/c": "/clear", "/v": "/version", "/exit": "/quit"}
+           "/m": "/memory", "/c": "/clear", "/a": "/analytics", "/v": "/version", "/exit": "/quit"}
 
 # ── Tab completion ────────────────────────────────────────────
 class SlashCompleter:
