@@ -59,7 +59,11 @@ class XiaClawConfig:
             import yaml
             with open(path) as f:
                 data = yaml.safe_load(f) or {}
-        except Exception:
+        except FileNotFoundError:
+            logger.debug(f"Config file not found: {path}, using env vars")
+            return cls.from_env()
+        except Exception as e:
+            logger.warning(f"Failed to load config from {path}: {e}, falling back to env vars")
             return cls.from_env()
 
         def _resolve(val):
