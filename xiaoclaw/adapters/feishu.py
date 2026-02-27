@@ -8,7 +8,7 @@ import json
 import logging
 from typing import Dict, Any, Optional
 
-logger = logging.getLogger("xiaoclaw.Fishu")
+logger = logging.getLogger("xiaoclaw.Feishu")
 
 # 飞书配置
 FEISHU_APP_ID = os.getenv("FEISHU_APP_ID", "")
@@ -27,20 +27,29 @@ class FeishuAdapter:
         """获取 tenant_access_token"""
         import requests
         
+        if not self.app_id or not self.app_secret:
+            raise ValueError(
+                "飞书 app_id 和 app_secret 未配置。"
+                "请设置环境变量 FEISHU_APP_ID 和 FEISHU_APP_SECRET"
+            )
+        
         url = "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal"
         data = {
             "app_id": self.app_id,
             "app_secret": self.app_secret
         }
         
-        response = requests.post(url, json=data)
+        response = requests.post(url, json=data, timeout=10)
         result = response.json()
         
         if result.get("code") == 0:
-            self.access_token = result["data"]["tenant_access_token"]
+            # Feishu API returns tenant_access_token at top level, not nested in "data"
+            self.access_token = result.get("tenant_access_token", "")
+            if not self.access_token:
+                raise Exception(f"Token field missing in response: {result}")
             return self.access_token
         else:
-            raise Exception(f"Failed to get token: {result}")
+            raise Exception(f"Failed to get token (code={result.get('code')}): {result.get('msg', result)}")
     
     def send_message(self, receive_id: str, message: str) -> Dict:
         """发送消息"""

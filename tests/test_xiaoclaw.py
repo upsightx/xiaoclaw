@@ -43,7 +43,7 @@ class TestConfig:
         cfg = XiaClawConfig()
         assert cfg.debug is False
         assert cfg.security_level == "strict"
-        assert cfg.max_context_tokens == 8000
+        assert cfg.max_context_tokens == 128000
 
 
 class TestSecurity:

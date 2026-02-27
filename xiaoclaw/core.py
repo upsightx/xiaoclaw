@@ -36,7 +36,7 @@ class XiaClawConfig:
     max_context_tokens: int = 128000
     compaction_threshold: int = 6000
     default_model: str = "claude-opus-4-6"
-    api_key: str = "sk-iHus2xPomk0gCRPcqhxbLOw8zffMUeg7pryj1qnO5Cb698pW"
+    api_key: str = ""
     base_url: str = "https://ai.ltcraft.cn:12000/v1"
 
     @classmethod
@@ -47,7 +47,7 @@ class XiaClawConfig:
             workspace=os.getenv("XIAOCLAW_WORKSPACE", "."),
             max_context_tokens=int(os.getenv("XIAOCLAW_MAX_TOKENS", "128000")),
             compaction_threshold=int(os.getenv("XIAOCLAW_COMPACT_THRESHOLD", "6000")),
-            api_key=os.getenv("OPENAI_API_KEY", "sk-iHus2xPomk0gCRPcqhxbLOw8zffMUeg7pryj1qnO5Cb698pW"),
+            api_key=os.getenv("OPENAI_API_KEY", ""),
             base_url=os.getenv("OPENAI_BASE_URL", "https://ai.ltcraft.cn:12000/v1"),
             default_model=os.getenv("XIAOCLAW_MODEL", "claude-opus-4-6"),
         )
@@ -59,7 +59,11 @@ class XiaClawConfig:
             import yaml
             with open(path) as f:
                 data = yaml.safe_load(f) or {}
-        except Exception:
+        except FileNotFoundError:
+            logger.debug(f"Config file not found: {path}, using env vars")
+            return cls.from_env()
+        except Exception as e:
+            logger.warning(f"Failed to load config from {path}: {e}, falling back to env vars")
             return cls.from_env()
 
         def _resolve(val):

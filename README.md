@@ -74,7 +74,8 @@ docker run --rm xiaoclaw pytest tests/ -v
 ```bash
 git clone https://github.com/upsightx/xiaoclaw.git && cd xiaoclaw
 pip install -e ".[all,dev]"
-xiaoclaw
+xiaoclaw          # 首次运行会启动设置向导
+xiaoclaw --setup  # 重新运行设置向导
 ```
 
 ## 环境变量
@@ -112,7 +113,12 @@ export XIAOCLAW_PROVIDER_BACKUP_MODEL=gpt-4
 | `/stats` | | Token统计 |
 | `/loglevel <level>` | | 设置日志级别 |
 | `/reload` | | 热重载配置 |
+| `/battle <问题>` | | 多角色辩论 |
+| `/battle-roles` | | 查看预设角色 |
+| `/battle-custom <角色> <问题>` | | 自定义角色辩论 |
 | `/clear` | `/c` | 新建会话 |
+| `/version` | `/v` | 查看版本 |
+| `/setup` | | 重新运行设置向导 |
 | `/quit` | `/q` | 退出 |
 
 ## Plugin开发
@@ -167,6 +173,8 @@ xiaoclaw/
 │   ├── api.py              # FastAPI服务
 │   ├── webhook.py          # Webhook服务
 │   ├── plugins.py          # Plugin系统
+│   ├── battle.py           # 多角色辩论引擎
+│   ├── subagent.py         # 子Agent并行任务
 │   ├── i18n.py             # 国际化
 │   ├── cli.py              # CLI界面
 │   └── adapters/

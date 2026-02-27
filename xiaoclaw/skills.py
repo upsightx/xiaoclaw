@@ -234,10 +234,35 @@ def create_skill(name: str, description: str, tools: Optional[Dict] = None) -> S
 def register_builtin_skills(registry: SkillRegistry):
     """Register built-in skills."""
     def calc(expression: str, **kw) -> str:
-        allowed = set("0123456789+-*/.() ")
-        if all(c in allowed for c in expression):
-            return str(eval(expression))
-        return "Error: Invalid expression"
+        """Calculate a math expression safely using ast."""
+        import ast
+        import operator
+        ops = {
+            ast.Add: operator.add, ast.Sub: operator.sub,
+            ast.Mult: operator.mul, ast.Div: operator.truediv,
+            ast.Pow: operator.pow, ast.Mod: operator.mod,
+            ast.FloorDiv: operator.floordiv,
+            ast.USub: operator.neg, ast.UAdd: operator.pos,
+        }
+        def _eval(node):
+            if isinstance(node, ast.Expression):
+                return _eval(node.body)
+            elif isinstance(node, ast.Constant) and isinstance(node.value, (int, float)):
+                return node.value
+            elif isinstance(node, ast.BinOp) and type(node.op) in ops:
+                return ops[type(node.op)](_eval(node.left), _eval(node.right))
+            elif isinstance(node, ast.UnaryOp) and type(node.op) in ops:
+                return ops[type(node.op)](_eval(node.operand))
+            else:
+                raise ValueError(f"Unsupported expression: {ast.dump(node)}")
+        try:
+            tree = ast.parse(expression.strip(), mode='eval')
+            result = _eval(tree)
+            return str(result)
+        except ZeroDivisionError:
+            return "Error: division by zero"
+        except Exception as e:
+            return f"Error: {e}"
 
     def get_time(timezone: str = "", **kw) -> str:
         """Get current date/time, optionally in a specific timezone."""
@@ -263,7 +288,9 @@ def register_builtin_skills(registry: SkillRegistry):
                     ast.FloorDiv, ast.USub, ast.UAdd, ast.Compare,
                     ast.Eq, ast.NotEq, ast.Lt, ast.LtE, ast.Gt, ast.GtE,
                     ast.BoolOp, ast.And, ast.Or, ast.Not, ast.IfExp,
-                    ast.Call, ast.Name, ast.Attribute, ast.Subscript, ast.Index, ast.Slice)
+                    ast.Call, ast.Name, ast.Attribute, ast.Subscript, ast.Index, ast.Slice,
+                    ast.Load, ast.Store, ast.Del, ast.Starred, ast.FormattedValue,
+                    ast.JoinedStr, ast.keyword)
             for node in ast.walk(tree):
                 if not isinstance(node, SAFE):
                     return f"Error: unsafe expression ({type(node).__name__})"

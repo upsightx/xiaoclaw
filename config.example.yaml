@@ -5,7 +5,7 @@ agent:
   debug: false
   security: strict
   workspace: "."
-  max_context_tokens: 8000
+  max_context_tokens: 128000
   compaction_threshold: 6000
 
 # Provider配置
