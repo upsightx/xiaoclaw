@@ -258,7 +258,19 @@ async def _save_session_memory(claw):
 
 # ── Main ──────────────────────────────────────────────────────
 async def main():
-    if "--version" in sys.argv or "-V" in sys.argv:
+    if "--web" in sys.args or "--webui" in sys.argv:
+        _load_saved_config()
+        config = XiaClawConfig.from_yaml(config_path) if config_path else XiaClawConfig.from_env()
+        _run_webui(config)
+        return
+
+        if "--web" in sys.argv or "--webui" in sys.argv:
+        _load_saved_config()
+        config = XiaClawConfig.from_yaml(config_path) if config_path else XiaClawConfig.from_env()
+        _run_webui(config)
+        return
+
+if "--version" in sys.argv or "-V" in sys.argv:
         print(f"xiaoclaw v{VERSION}"); return
 
     if "--help" in sys.argv or "-h" in sys.argv:
@@ -266,6 +278,7 @@ async def main():
         print(f"  xiaoclaw              交互模式")
         print(f"  xiaoclaw --setup      运行设置向导")
         print(f"  xiaoclaw --debug      调试模式")
+        print(f"  xiaoclaw --web        启动 Web UI")
         print(f"  xiaoclaw --test       自检测试")
         print(f"  xiaoclaw --config X   指定配置文件")
         return
@@ -531,3 +544,9 @@ async def main():
 def _cli_entry():
     """Entry point for `xiaoclaw` console command."""
     asyncio.run(main())
+
+def _run_webui(config):
+    """Run Web UI mode."""
+    from .webui import run_webui
+    print(f"\n  🌐 启动 Web UI...\n")
+    run_webui(host="0.0.0.0", port=8080)

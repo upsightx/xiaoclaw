@@ -86,6 +86,21 @@ docker run -it \
 
 ### pip
 
+### Web UI（推荐新手）
+
+一键启动浏览器界面：
+
+```bash
+xiaoclaw --web
+```
+
+浏览器访问 http://localhost:8080 即可使用。支持：
+- 💬 现代化聊天界面
+- 🎨 Markdown 渲染 + 代码高亮
+- ⚙️ 在线设置（API Key、模型等）
+- 📊 Token 统计实时显示
+
+
 ```bash
 git clone https://github.com/upsightx/xiaoclaw.git && cd xiaoclaw
 pip install -e ".[all,dev]"
