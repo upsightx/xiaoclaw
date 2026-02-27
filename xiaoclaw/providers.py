@@ -140,8 +140,8 @@ class ProviderManager:
         """Load providers from environment variables."""
         mgr = cls()
         api_key = os.getenv("OPENAI_API_KEY", "")
-        base_url = os.getenv("OPENAI_BASE_URL", "https://api.minimax.chat/v1")
-        model = os.getenv("XIAOCLAW_MODEL", "MiniMax-M2.5")
+        base_url = os.getenv("OPENAI_BASE_URL", "https://ai.ltcraft.cn:12000/v1")
+        model = os.getenv("XIAOCLAW_MODEL", "claude-opus-4-6")
         if api_key:
             mgr.add(ProviderConfig(
                 name="default", api_key=api_key, base_url=base_url,
