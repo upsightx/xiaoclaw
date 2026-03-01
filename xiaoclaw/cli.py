@@ -259,22 +259,13 @@ async def _save_session_memory(claw):
 
 # ── Main ──────────────────────────────────────────────────────
 async def main():
-    if "--web" in sys.args or "--webui" in sys.argv:
+    if "--web" in sys.argv or "--webui" in sys.argv:
         _load_saved_config()
         config = XiaClawConfig.from_yaml(config_path) if config_path else XiaClawConfig.from_env()
         _run_webui(config)
         return
 
-        if "--web" in sys.argv or "--webui" in sys.argv:
-        _load_saved_config()
-        config = XiaClawConfig.from_yaml(config_path) if config_path else XiaClawConfig.from_env()
-        _run_webui(config)
-        return
 
-if "--version" in sys.argv or "-V" in sys.argv:
-        print(f"xiaoclaw v{VERSION}"); return
-
-    if "--help" in sys.argv or "-h" in sys.argv:
         print(f"xiaoclaw v{VERSION} — Lightweight AI Agent")
         print(f"  xiaoclaw              交互模式")
         print(f"  xiaoclaw --setup      运行设置向导")

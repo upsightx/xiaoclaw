@@ -634,17 +634,17 @@ class XiaClaw:
                 yield f"[LLM Error: {e}]"; return
 
             usage = getattr(resp, 'usage', None)
-                self.stats.record(usage)
-                # Record analytics
-                if usage:
-                    import time
-                    self.analytics.record(
-                        model=self.providers.active.current_model,
-                        provider=self.providers.active_name,
-                        input_tokens=usage.prompt_tokens,
-                        output_tokens=usage.completion_tokens,
-                        duration_ms=0,  # Not tracked in non-streaming
-                        success=True
+            self.stats.record(usage)
+            # Record analytics
+            if usage:
+                import time
+                self.analytics.record(
+                    model=self.providers.active.current_model,
+                    provider=self.providers.active_name,
+                    input_tokens=usage.prompt_tokens,
+                    output_tokens=usage.completion_tokens,
+                    duration_ms=0,  # Not tracked in non-streaming
+                    success=True
                     )
             choice = resp.choices[0]
 

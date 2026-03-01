@@ -69,6 +69,8 @@ class SubagentManager:
 
                 result.result = "".join(parts)
                 result.status = "done"
+                # 清理子 agent 的会话，避免消息格式问题
+                claw.session.messages.clear()
             except Exception as e:
                 result.error = str(e)
                 result.status = "error"
