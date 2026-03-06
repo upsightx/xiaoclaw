@@ -1,12 +1,15 @@
 """xiaoclaw Analytics — Token usage tracking and statistics"""
 import json
 import time
+import logging
 from pathlib import Path
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Any
 from dataclasses import dataclass, asdict
 from collections import defaultdict
 import threading
+
+logger = logging.getLogger("xiaoclaw.Analytics")
 
 STATS_DIR = Path.home() / ".xiaoclaw" / "stats"
 
@@ -61,31 +64,38 @@ class Analytics:
         now = datetime.now()
         today = now.strftime("%Y-%m-%d")
         
-        # 如果日期变了，先保存之前的数据
-        if today != self._current_date and self._current_records:
-            self._save_daily_records(self._current_date, self._current_records)
-            self._current_records = []
-            self._current_date = today
-        
-        record = CallRecord(
-            timestamp=now.timestamp(),
-            model=model,
-            provider=provider,
-            input_tokens=input_tokens,
-            output_tokens=output_tokens,
-            total_tokens=input_tokens + output_tokens,
-            duration_ms=duration_ms,
-            success=success,
-            error=error
-        )
-        
         with self._lock:
+            # 如果日期变了，先保存之前的数据
+            if today != self._current_date and self._current_records:
+                self._save_daily_records(self._current_date, self._current_records)
+                self._current_records = []
+                self._current_date = today
+            
+            record = CallRecord(
+                timestamp=now.timestamp(),
+                model=model,
+                provider=provider,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                total_tokens=input_tokens + output_tokens,
+                duration_ms=duration_ms,
+                success=success,
+                error=error
+            )
+            
             self._current_records.append(record)
-        
-        # 每 10 条自动保存一次
-        if len(self._current_records) >= 10:
-            self._save_daily_records(today, self._current_records)
-            self._current_records = []
+            
+            # 每 10 条自动保存一次
+            if len(self._current_records) >= 10:
+                self._save_daily_records(today, self._current_records)
+                self._current_records = []
+    
+    def flush(self) -> None:
+        """Explicitly flush current records to disk."""
+        with self._lock:
+            if self._current_records:
+                self._save_daily_records(self._current_date, self._current_records)
+                self._current_records = []
     
     def _save_daily_records(self, date: str, records: List[CallRecord]) -> None:
         """Save records to daily file."""
@@ -94,13 +104,14 @@ class Analytics:
             
         file_path = self._get_daily_file(date)
         
-        # 读取现有数据
+        # 读取现有数据 - catch specific exceptions
         existing = []
         if file_path.exists():
             try:
                 with open(file_path, 'r') as f:
                     existing = json.load(f).get('records', [])
-            except:
+            except (json.JSONDecodeError, OSError) as e:
+                logger.warning(f"Could not read existing stats file for {date}: {e}. Starting fresh.")
                 existing = []
         
         # 合并
@@ -161,15 +172,11 @@ class Analytics:
         )
     
     def get_daily_stats(self, date: Optional[str] = None) -> Optional[DailyStats]:
-        """Get stats for a specific date."""
+        """Get stats for a specific date (read-only, no side effects)."""
         date = date or datetime.now().strftime("%Y-%m-%d")
         file_path = self._get_daily_file(date)
         
-        # 先保存当前内存中的记录
-        if date == self._current_date and self._current_records:
-            self._save_daily_records(date, self._current_records)
-            self._current_records = []
-        
+        # Don't flush records as a side effect - just read from file
         if not file_path.exists():
             return None
         
@@ -178,7 +185,8 @@ class Analytics:
                 data = json.load(f)
                 summary = data.get('summary', {})
                 return DailyStats(**summary)
-        except:
+        except (json.JSONDecodeError, KeyError, OSError) as e:
+            logger.warning(f"Could not read stats file for {date}: {e}")
             return None
     
     def get_range_stats(self, start_date: str, end_date: str) -> Dict[str, Any]:
@@ -262,38 +270,41 @@ class Analytics:
         )
     
     def print_report(self, days: int = 7) -> str:
-        """Print a formatted report."""
+        """Print a formatted report (respects XIAOCLAW_LANG)."""
+        from .i18n import t, LANG
         stats = self.get_recent_stats(days)
         
         lines = []
-        lines.append(f"\n📊 Token 统计报告 (最近 {days} 天)")
+        title = t("analytics_title", lang=LANG)
+        lines.append(f"\n📊 {title} ({days} days)")
         lines.append("=" * 50)
         
         totals = stats['totals']
-        lines.append(f"\n📈 总体:")
-        lines.append(f"  调用次数: {totals['calls']:,}")
-        lines.append(f"  成功率:   {stats['success_rate']}%")
-        lines.append(f"  总 Tokens: {totals['tokens']:,}")
-        lines.append(f"  输入:     {totals['input_tokens']:,}")
-        lines.append(f"  输出:     {totals['output_tokens']:,}")
-        lines.append(f"  平均耗时: {totals['avg_duration_ms']:.0f}ms")
+        lines.append(f"\n📈 {'Overall:' if LANG != 'zh' else '总体:'}")
+        lines.append(f"  {t('analytics_requests', lang=LANG)}: {totals['calls']:,}")
+        lines.append(f"  {t('analytics_success', lang=LANG)}:   {stats['success_rate']}%")
+        lines.append(f"  {t('analytics_tokens', lang=LANG)}: {totals['tokens']:,}")
+        lines.append(f"  Input:     {totals['input_tokens']:,}")
+        lines.append(f"  Output:    {totals['output_tokens']:,}")
+        lines.append(f"  Avg time:  {totals['avg_duration_ms']:.0f}ms")
         
         if stats['by_model']:
-            lines.append(f"\n🤖 按模型:")
+            lines.append(f"\n🤖 {'By Model:' if LANG != 'zh' else '按模型:'}")
             for model, data in sorted(stats['by_model'].items(), key=lambda x: -x[1]['tokens']):
                 lines.append(f"  {model}:")
-                lines.append(f"    调用: {data['calls']:,} | Tokens: {data['tokens']:,}")
-                lines.append(f"    输入: {data['input']:,} | 输出: {data['output']:,}")
+                lines.append(f"    Calls: {data['calls']:,} | Tokens: {data['tokens']:,}")
+                lines.append(f"    Input: {data['input']:,} | Output: {data['output']:,}")
         
         if stats['by_provider']:
-            lines.append(f"\n🔌 按提供商:")
+            lines.append(f"\n🔌 {'By Provider:' if LANG != 'zh' else '按提供商:'}")
             for provider, data in sorted(stats['by_provider'].items(), key=lambda x: -x[1]['tokens']):
-                lines.append(f"  {provider}: {data['calls']:,} 次, {data['tokens']:,} tokens")
+                lines.append(f"  {provider}: {data['calls']:,} calls, {data['tokens']:,} tokens")
         
         if stats['daily']:
-            lines.append(f"\n📅 每日统计:")
+            lines.append(f"\n📅 {'Daily:' if LANG != 'zh' else '每日统计:'}")
             for d in stats['daily'][-7:]:  # 最近 7 天
                 bar = "█" * min(20, d['tokens'] // 1000)
+                lines.append(f"  {d['date']}: {d['calls']:>3} calls | {d['tokens']:>7,} tokens | {d['success_rate']:.0f}% {bar}")
                 lines.append(f"  {d['date']}: {d['calls']:>3} 次 | {d['tokens']:>7,} tokens | {d['success_rate']:.0f}% {bar}")
         
         return "\n".join(lines)

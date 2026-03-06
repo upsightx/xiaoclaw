@@ -1,7 +1,14 @@
 """xiaoclaw i18n — minimal internationalization support"""
 import os
+import logging
+import re
+
+logger = logging.getLogger("xiaoclaw.i18n")
 
 LANG = os.getenv("XIAOCLAW_LANG", "zh")
+
+# Warn once about unsupported languages
+_warned_langs = set()
 
 _STRINGS = {
     "zh": {
@@ -15,6 +22,11 @@ _STRINGS = {
         "exported": "📤 已导出到 {path}",
         "blocked": "🚫 已拦截危险命令: {cmd}",
         "system_prompt": "你是 xiaoclaw v{version}，一个兼容OpenClaw生态的轻量级AI Agent。\n工具: {tools}\n保持简洁、专业、高效。",
+        "analytics_title": "📊 使用统计",
+        "analytics_requests": "调用次数",
+        "analytics_success": "成功率",
+        "analytics_tokens": "Token 使用",
+        "analytics_tools": "工具调用",
     },
     "en": {
         "greeting": "Hello! I'm xiaoclaw v{version}.",
@@ -27,16 +39,28 @@ _STRINGS = {
         "exported": "📤 Exported to {path}",
         "blocked": "🚫 Blocked dangerous command: {cmd}",
         "system_prompt": "You are xiaoclaw v{version}, a lightweight AI Agent compatible with OpenClaw.\nTools: {tools}\nBe concise, professional, efficient.",
+        "analytics_title": "📊 Usage Statistics",
+        "analytics_requests": "Requests",
+        "analytics_success": "Success Rate",
+        "analytics_tokens": "Tokens Used",
+        "analytics_tools": "Tool Calls",
     },
 }
 
 
 def t(key: str, lang: str = "", **kwargs) -> str:
     """Get translated string."""
+    global _warned_langs
+    if lang and lang not in _STRINGS and lang not in _warned_langs:
+        logger.warning(f"Unsupported language '{lang}', falling back to English. Supported: {', '.join(_STRINGS.keys())}")
+        _warned_langs.add(lang)
+    
+    # Fall back to English for unknown languages
     lang = lang or LANG
-    strings = _STRINGS.get(lang, _STRINGS["zh"])
-    template = strings.get(key, _STRINGS["zh"].get(key, key))
+    strings = _STRINGS.get(lang, _STRINGS["en"])
+    template = strings.get(key, _STRINGS["en"].get(key, key))
     try:
         return template.format(**kwargs)
     except (KeyError, IndexError):
-        return template
+        # Remove unfilled placeholders for graceful degradation
+        return re.sub(r'\{[^}]+\}', '', template).strip()
