@@ -6,26 +6,35 @@ Feishu Adapter - 飞书集成
 import os
 import json
 import logging
+import time
 from typing import Dict, Any, Optional
 
 logger = logging.getLogger("xiaoclaw.Feishu")
-
-# 飞书配置
-FEISHU_APP_ID = os.getenv("FEISHU_APP_ID", "")
-FEISHU_APP_SECRET = os.getenv("FEISHU_APP_SECRET", "")
 
 
 class FeishuAdapter:
     """飞书适配器"""
     
-    def __init__(self, app_id: str = None, app_secret: str = None):
-        self.app_id = app_id or FEISHU_APP_ID
-        self.app_secret = app_secret or FEISHU_APP_SECRET
+    def __init__(self, app_id: Optional[str] = None, app_secret: Optional[str] = None, 
+                 verification_token: Optional[str] = None):
+        # Read from env in __init__ only, don't expose at module level
+        self.app_id = app_id or os.getenv("FEISHU_APP_ID", "")
+        self.app_secret = app_secret or os.getenv("FEISHU_APP_SECRET", "")
+        self.verification_token = verification_token or os.getenv("FEISHU_VERIFICATION_TOKEN", "")
         self.access_token: Optional[str] = None
+        self._token_expires_at: float = 0  # Token expiry timestamp
+    
+    def _is_token_valid(self) -> bool:
+        """Check if the cached token is still valid."""
+        return self.access_token and time.time() < self._token_expires_at - 60  # 60s buffer
         
-    def get_tenant_access_token(self) -> str:
+    def get_tenant_access_token(self, force_refresh: bool = False) -> str:
         """获取 tenant_access_token"""
         import requests
+        
+        # Return cached token if valid
+        if not force_refresh and self._is_token_valid():
+            return self.access_token
         
         if not self.app_id or not self.app_secret:
             raise ValueError(
@@ -43,8 +52,9 @@ class FeishuAdapter:
         result = response.json()
         
         if result.get("code") == 0:
-            # Feishu API returns tenant_access_token at top level, not nested in "data"
             self.access_token = result.get("tenant_access_token", "")
+            expire = result.get("expire", 7200)  # Default 2 hours
+            self._token_expires_at = time.time() + expire
             if not self.access_token:
                 raise Exception(f"Token field missing in response: {result}")
             return self.access_token
@@ -55,8 +65,8 @@ class FeishuAdapter:
         """发送消息"""
         import requests
         
-        if not self.access_token:
-            self.get_tenant_access_token()
+        # Get fresh token (will auto-refresh if expired)
+        self.get_tenant_access_token()
         
         url = "https://open.feishu.cn/open-apis/im/v1/messages"
         params = {
@@ -73,16 +83,34 @@ class FeishuAdapter:
         }
         
         response = requests.post(url, params=params, headers=headers, json=data)
-        return response.json()
+        result = response.json()
+        
+        # Check for errors
+        if result.get("code") != 0:
+            logger.error(f"Feishu send_message error: {result}")
+            # If token expired, force refresh and retry once
+            if result.get("code") == 99991663:  # Token expired
+                self.get_tenant_access_token(force_refresh=True)
+                headers["Authorization"] = f"Bearer {self.access_token}"
+                response = requests.post(url, params=params, headers=headers, json=data)
+                result = response.json()
+        
+        return result
     
-    def handle_webhook(self, payload: Dict) -> Optional[str]:
+    def handle_webhook(self, payload: Dict, headers: Dict = None) -> Optional[str]:
         """处理飞书 webhook 事件"""
-        # 简化实现
+        # Verify webhook token if configured
+        if self.verification_token:
+            token = payload.get("token", "")
+            if token != self.verification_token:
+                logger.warning("Feishu webhook: invalid token")
+                return None
+        
         event_type = payload.get("type", "")
         
         if event_type == "url_verification":
-            # 验证 URL
-            return payload.get("challenge", "")
+            # Return proper JSON response per Feishu API spec
+            return json.dumps({"challenge": payload.get("challenge", "")})
         
         return None
 

@@ -1,7 +1,7 @@
 """xiaoclaw Discord Adapter — discord.py integration"""
 import os
 import logging
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
 
 logger = logging.getLogger("xiaoclaw.Discord")
 
@@ -11,6 +11,9 @@ try:
     HAS_DISCORD = True
 except ImportError:
     HAS_DISCORD = False
+    if TYPE_CHECKING:
+        import discord
+        from discord.ext import commands
 
 
 class DiscordAdapter:
@@ -22,6 +25,8 @@ class DiscordAdapter:
         self.allowed_channels = allowed_channels  # None = allow all
         self.command_prefix = command_prefix
         self.claw = None
+        # Per-user session storage
+        self._sessions: dict = {}
 
     def _check_channel(self, channel_id: int) -> bool:
         if self.allowed_channels is None:
@@ -46,6 +51,8 @@ class DiscordAdapter:
 
         @bot.event
         async def on_message(message):
+            if not self.claw:
+                return
             if message.author == bot.user:
                 return
             if not self._check_channel(message.channel.id):
@@ -66,33 +73,50 @@ class DiscordAdapter:
             if not text:
                 return
 
-            logger.info(f"Discord [{message.author}]: {text[:80]}")
+            # Sanitize log output
+            safe_text = text[:80].replace('\n', '\\n').replace('\r', '\\r')
+            logger.info("Discord [%s]: %s", message.author, safe_text)
+            
+            # Use per-user session
+            user_id = str(message.author.id)
+            if user_id not in self._sessions:
+                self._sessions[user_id] = self.claw.session_mgr.new_session()
+            
+            old_session = self.claw.session
+            self.claw.session = self._sessions[user_id]
             try:
-                reply = await self.claw.handle_message(text, user_id=str(message.author.id))
-                # Discord has 2000 char limit
-                for i in range(0, len(reply), 1900):
-                    await message.reply(reply[i:i + 1900])
-            except Exception as e:
-                logger.error(f"Discord handle error: {e}")
-                await message.reply(f"❌ Error: {e}")
+                reply = await self.claw.handle_message(text, user_id=user_id)
+            finally:
+                self.claw.session = old_session
+            
+            # Discord has 2000 char limit
+            for i in range(0, len(reply), 1900):
+                await message.reply(reply[i:i + 1900])
+        except Exception as e:
+            logger.error(f"Discord handle error: {e}")
+            await message.reply("❌ Something went wrong, please try again.")
 
         @bot.command(name="tools")
         async def cmd_tools(ctx):
-            if not self._check_channel(ctx.channel.id):
+            if not self.claw or not self._check_channel(ctx.channel.id):
                 return
             tools = ", ".join(self.claw.tools.list_names())
             await ctx.send(f"🔧 Tools: {tools}")
 
         @bot.command(name="clear")
         async def cmd_clear(ctx):
-            if not self._check_channel(ctx.channel.id):
+            if not self.claw or not self._check_channel(ctx.channel.id):
                 return
-            self.claw.session = self.claw.session_mgr.new_session()
+            user_id = str(ctx.author.id)
+            self._sessions[user_id] = self.claw.session_mgr.new_session()
             await ctx.send("🔄 New session started.")
 
         @bot.command(name="stats")
         async def cmd_stats(ctx):
-            if not self._check_channel(ctx.channel.id):
+            if not self.claw or not self._check_channel(ctx.channel.id):
+                return
+            if not hasattr(self.claw, 'stats'):
+                await ctx.send("⚠️ Stats not available")
                 return
             await ctx.send(self.claw.stats.summary())
 

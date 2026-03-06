@@ -1,7 +1,9 @@
 """xiaoclaw Slack Adapter — Slack Bolt integration"""
 import os
+import re
 import logging
-from typing import Optional
+import asyncio
+from typing import Optional, TYPE_CHECKING
 
 logger = logging.getLogger("xiaoclaw.Slack")
 
@@ -11,6 +13,9 @@ try:
     HAS_SLACK = True
 except ImportError:
     HAS_SLACK = False
+    if TYPE_CHECKING:
+        from slack_bolt.async_app import AsyncApp
+        from slack_bolt.adapter.socket_mode.async_handler import AsyncSocketModeHandler
 
 
 class SlackAdapter:
@@ -22,6 +27,10 @@ class SlackAdapter:
         self.app_token = app_token or os.getenv("SLACK_APP_TOKEN", "")
         self.allowed_channels = allowed_channels
         self.claw = None
+        # Per-user session storage
+        self._sessions: dict = {}
+        # Pre-compile regex for bot mention removal
+        self._mention_pattern = re.compile(r'<@\w+>')
 
     def _check_channel(self, channel: str) -> bool:
         if self.allowed_channels is None:
@@ -43,22 +52,33 @@ class SlackAdapter:
             if not self._check_channel(event.get("channel", "")):
                 return
             text = event.get("text", "").strip()
-            # Remove bot mention
-            import re
-            text = re.sub(r'<@\w+>', '', text).strip()
+            # Remove bot mention using pre-compiled regex
+            text = self._mention_pattern.sub('', text).strip()
             if not text:
                 return
             user_id = event.get("user", "unknown")
-            logger.info(f"Slack [{user_id}]: {text[:80]}")
+            safe_text = text[:80].replace('\n', '\\n')
+            logger.info("Slack [%s]: %s", user_id, safe_text)
+            
+            # Per-user session
+            if user_id not in self._sessions:
+                self._sessions[user_id] = self.claw.session_mgr.new_session()
+            old_session = self.claw.session
+            self.claw.session = self._sessions[user_id]
             try:
                 reply = await self.claw.handle_message(text, user_id=user_id)
-                await say(reply[:3000])
-            except Exception as e:
-                logger.error(f"Slack handle error: {e}")
-                await say(f"❌ Error: {e}")
+            finally:
+                self.claw.session = old_session
+            
+            # Chunk long messages (Slack limit 3000)
+            for i in range(0, len(reply), 3000):
+                await say(reply[i:i + 3000])
 
         @app.event("message")
         async def handle_dm(event, say):
+            # Only handle plain messages (ignore subtypes)
+            if event.get("subtype"):
+                return
             # Only handle DMs (channel type 'im')
             if event.get("channel_type") != "im":
                 return
@@ -68,14 +88,23 @@ class SlackAdapter:
             if not text:
                 return
             user_id = event.get("user", "unknown")
-            logger.info(f"Slack DM [{user_id}]: {text[:80]}")
+            safe_text = text[:80].replace('\n', '\\n')
+            logger.info("Slack DM [%s]: %s", user_id, safe_text)
+            
+            # Per-user session
+            if user_id not in self._sessions:
+                self._sessions[user_id] = self.claw.session_mgr.new_session()
+            old_session = self.claw.session
+            self.claw.session = self._sessions[user_id]
             try:
                 reply = await self.claw.handle_message(text, user_id=user_id)
-                await say(reply[:3000])
-            except Exception as e:
-                await say(f"❌ Error: {e}")
+            finally:
+                self.claw.session = old_session
+            
+            # Chunk long messages
+            for i in range(0, len(reply), 3000):
+                await say(reply[i:i + 3000])
 
-        import asyncio
         async def _run():
             handler = AsyncSocketModeHandler(app, self.app_token)
             logger.info("Slack bot starting (Socket Mode)...")

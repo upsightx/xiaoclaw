@@ -2,7 +2,7 @@
 import os
 import logging
 import asyncio
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
 
 logger = logging.getLogger("xiaoclaw.Telegram")
 
@@ -14,6 +14,10 @@ try:
     HAS_TELEGRAM = True
 except ImportError:
     HAS_TELEGRAM = False
+    # For type hints when module not installed
+    if TYPE_CHECKING:
+        from telegram import Update
+        from telegram.ext import ContextTypes
 
 
 class TelegramAdapter:
@@ -21,8 +25,14 @@ class TelegramAdapter:
 
     def __init__(self, token: str = "", allowed_users: Optional[list] = None):
         self.token = token or os.getenv("TELEGRAM_BOT_TOKEN", "")
-        self.allowed_users = allowed_users  # None = allow all
+        # Validate and normalize allowed_users to int IDs
+        if allowed_users:
+            self.allowed_users = [int(u) for u in allowed_users]
+        else:
+            self.allowed_users = None
         self.claw = None  # set via .start(claw)
+        # Per-user session storage
+        self._sessions: dict = {}
         if not HAS_TELEGRAM:
             logger.error("python-telegram-bot not installed. pip install 'xiaoclaw[telegram]'")
 
@@ -36,7 +46,9 @@ class TelegramAdapter:
     async def _cmd_clear(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         if not self._check_user(update) or not self.claw:
             return
-        self.claw.session = self.claw.session_mgr.new_session()
+        uid = update.effective_user.id
+        # Create new session for this user only
+        self._sessions[uid] = self.claw.session_mgr.new_session()
         await update.message.reply_text("🔄 New session started.")
 
     async def _cmd_tools(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -51,15 +63,27 @@ class TelegramAdapter:
         text = update.message.text
         if not text:
             return
-        logger.info(f"TG [{update.effective_user.id}]: {text[:80]}")
+        # Sanitize log output to prevent log injection
+        safe_text = text[:80].replace('\n', '\\n').replace('\r', '\\r')
+        logger.info("TG [%s]: %s", update.effective_user.id, safe_text)
         try:
-            reply = await self.claw.handle_message(text)
+            # Use per-user session
+            uid = update.effective_user.id
+            if uid not in self._sessions:
+                self._sessions[uid] = self.claw.session_mgr.new_session()
+            # Temporarily swap session for this user
+            old_session = self.claw.session
+            self.claw.session = self._sessions[uid]
+            try:
+                reply = await self.claw.handle_message(text)
+            finally:
+                self.claw.session = old_session
             # Telegram has 4096 char limit per message
             for i in range(0, len(reply), 4000):
                 await update.message.reply_text(reply[i:i + 4000])
         except Exception as e:
             logger.error(f"Handle error: {e}")
-            await update.message.reply_text(f"❌ Error: {e}")
+            await update.message.reply_text("❌ Something went wrong, please try again.")
 
     def _check_user(self, update: Update) -> bool:
         if self.allowed_users is None:
