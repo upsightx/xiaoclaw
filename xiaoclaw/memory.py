@@ -46,6 +46,16 @@ class MemoryManager:
 
     def _search_file(self, filepath: Path, keywords: List[str], limit: int) -> List[Dict]:
         results = []
+        # Validate path is within workspace to prevent path traversal
+        try:
+            resolved_path = filepath.resolve()
+            workspace_resolved = self.workspace.resolve()
+            if not str(resolved_path).startswith(str(workspace_resolved)):
+                logger.warning(f"Path traversal attempt detected: {filepath}")
+                return results
+        except Exception as e:
+            logger.error(f"Error validating path {filepath}: {e}")
+            return results
         try:
             lines = filepath.read_text(encoding="utf-8").split("\n")
             for i, line in enumerate(lines):
@@ -54,8 +64,12 @@ class MemoryManager:
                 lower = line.lower()
                 score = sum(1 for kw in keywords if kw in lower)
                 if score > 0:
+                    try:
+                        rel_path = str(filepath.relative_to(self.workspace))
+                    except ValueError:
+                        rel_path = str(filepath)
                     results.append({
-                        "file": str(filepath.relative_to(self.workspace)),
+                        "file": rel_path,
                         "line": i + 1,
                         "content": line.strip(),
                         "score": score,
@@ -69,7 +83,11 @@ class MemoryManager:
 
     def memory_get(self, file_path: str, start_line: int = 1, end_line: int = 0) -> str:
         """Read specific lines from a memory file."""
-        fp = self.workspace / file_path
+        fp = (self.workspace / file_path).resolve()
+        # Validate path is within workspace to prevent path traversal
+        workspace_resolved = self.workspace.resolve()
+        if not str(fp).startswith(str(workspace_resolved)):
+            return "Error: access denied — path outside workspace"
         if not fp.exists():
             return f"Error: file not found: {file_path}"
         try:
@@ -117,11 +135,9 @@ class MemoryManager:
         logger.info("MEMORY.md updated")
 
     def append_memory(self, text: str):
-        """Append to MEMORY.md."""
-        existing = self.read_memory()
-        self.memory_file.write_text(
-            existing.rstrip() + "\n\n" + text.strip() + "\n", encoding="utf-8"
-        )
+        """Append to MEMORY.md (atomic append operation)."""
+        with open(self.memory_file, "a", encoding="utf-8") as f:
+            f.write("\n\n" + text.strip() + "\n")
 
     def append_daily(self, text: str, date: Optional[str] = None):
         """Append to today's daily memory file."""

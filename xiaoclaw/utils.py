@@ -9,7 +9,12 @@ logger = logging.getLogger("xiaoclaw")
 
 # ─── Security ─────────────────────────────────────────
 
-DANGEROUS = ["rm -rf", "dd if=", "mkfs", "> /dev/", "format c:", "del /f"]
+DANGEROUS = [
+    "rm -rf", "rm -r -f", "rm -fr", "dd if=", "mkfs", "> /dev/",
+    "format c:", "del /f", "find / -delete", "chmod -R 777",
+    ":(){ :|:& };:", "wget", "curl.*|.*sh", ">/dev/sda",
+    "shred -u", "mv /dev/null", "ln -s /dev/null",
+]
 
 
 class SecurityManager:
@@ -79,7 +84,19 @@ class RateLimiter:
         if len(self._calls[key]) >= self.max_calls:
             return False
         self._calls[key].append(now)
+        # Cleanup: remove keys with empty call lists to prevent memory leak
+        self._calls = {k: v for k, v in self._calls.items() if v}
         return True
+
+    def cleanup(self):
+        """Remove expired keys to prevent memory leak."""
+        now = _time.time()
+        self._calls = {
+            k: [t for t in v if now - t < self.window]
+            for k, v in self._calls.items()
+        }
+        # Remove keys with empty lists
+        self._calls = {k: v for k, v in self._calls.items() if v}
 
     def remaining(self, key: str = "default") -> int:
         now = _time.time()
@@ -121,7 +138,11 @@ class TokenStats:
 # ─── Hook System ──────────────────────────────────────
 
 class HookManager:
-    """before_tool_call / after_tool_call / message_received hooks."""
+    """before_tool_call / after_tool_call / message_received hooks.
+    
+    Note: fire() returns the result of the first hook that returns a non-None
+    value, silently skipping remaining hooks (first-non-None-wins semantics).
+    """
 
     def __init__(self):
         self._hooks: Dict[str, List[Callable]] = {}

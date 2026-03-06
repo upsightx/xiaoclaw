@@ -151,7 +151,14 @@ class ProviderManager:
             if not p.ready:
                 continue
             result = await p.chat(messages, **kwargs)
-            if not result.startswith("[LLM Error"):
+            # Handle both dict (return_stats=True) and string returns
+            if isinstance(result, dict):
+                if result.get("success"):
+                    if name != self.active_name:
+                        logger.info(f"Failover: switched to '{name}'")
+                        self.active_name = name
+                    return result
+            elif not result.startswith("[LLM Error"):
                 if name != self.active_name:
                     logger.info(f"Failover: switched to '{name}'")
                     self.active_name = name

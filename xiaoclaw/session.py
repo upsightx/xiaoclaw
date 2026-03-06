@@ -16,13 +16,17 @@ logger = logging.getLogger("xiaoclaw.Session")
 
 DEFAULT_SESSIONS_DIR = Path(".xiaoclaw/sessions")
 
+# Cache for tiktoken encoders to avoid expensive re-initialization
+_encoder_cache = {}
+
 
 def count_tokens(text: str, model: str = "gpt-4") -> int:
     """Count tokens using tiktoken, fallback to char estimate."""
     if HAS_TIKTOKEN:
         try:
-            enc = tiktoken.encoding_for_model(model)
-            return len(enc.encode(text))
+            if model not in _encoder_cache:
+                _encoder_cache[model] = tiktoken.encoding_for_model(model)
+            return len(_encoder_cache[model].encode(text))
         except Exception:
             pass
     return len(text) // 3  # rough estimate
@@ -66,6 +70,9 @@ class Session:
                 msg[k] = extra[k]
         self.messages.append(msg)
         self.metadata["updated_at"] = time.time()
+        # Ensure metadata line exists on first write
+        if not self._file.exists():
+            self._append_line({"_meta": True, **self.metadata})
         self._append_line(msg)
         return msg
 
@@ -79,8 +86,8 @@ class Session:
         """Full save (rewrite entire file)."""
         self._file.parent.mkdir(parents=True, exist_ok=True)
         with open(self._file, "w", encoding="utf-8") as f:
-            # First line is metadata
-            f.write(json.dumps({"_meta": True, **self.metadata}, ensure_ascii=False) + "\n")
+            # First line is metadata (use unique sentinel to avoid false positives)
+            f.write(json.dumps({"_xc_meta": True, **self.metadata}, ensure_ascii=False) + "\n")
             for msg in self.messages:
                 f.write(json.dumps(msg, ensure_ascii=False) + "\n")
 
@@ -94,7 +101,8 @@ class Session:
                 if not line.strip():
                     continue
                 data = json.loads(line)
-                if data.get("_meta"):
+                # Use unique sentinel to avoid false positives from user messages
+                if data.get("_xc_meta"):
                     self.metadata.update(data)
                 else:
                     self.messages.append(data)
@@ -201,12 +209,13 @@ class SessionManager:
                 meta = json.loads(first_line) if first_line else {}
             except Exception:
                 meta = {}
+            # Check for both old (_meta) and new (_xc_meta) sentinel
             result.append({
                 "session_id": sid,
                 "file": str(f),
                 "size": f.stat().st_size,
                 "modified": f.stat().st_mtime,
-                "meta": meta if meta.get("_meta") else {},
+                "meta": meta if meta.get("_meta") or meta.get("_xc_meta") else {},
             })
         return result
 

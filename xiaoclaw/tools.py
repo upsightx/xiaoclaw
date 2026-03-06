@@ -68,11 +68,12 @@ TOOL_DEFS = [
 
 
 class ToolRegistry:
-    def __init__(self, security, memory=None, skills_registry=None):
+    def __init__(self, security, memory=None, skills_registry=None, workspace=None):
         self.tools: Dict[str, Dict] = {}
         self.security = security
         self.memory = memory
         self.skills_registry = skills_registry
+        self.workspace = Path(workspace).resolve() if workspace else Path.cwd()
         self._disabled: set = set()
         self._extra_tool_defs: List[Dict] = []  # for skill tools
         self._skills_dir: Optional[Path] = None
@@ -95,6 +96,14 @@ class ToolRegistry:
             ("create_skill", self._create_skill, "Create custom skill"),
         ]:
             self.tools[n] = {"func": f, "description": d}
+
+    def _is_within_workspace(self, p: Path) -> bool:
+        """Check if path is within workspace (prevent path traversal)."""
+        try:
+            resolved = p.resolve()
+            return str(resolved).startswith(str(self.workspace))
+        except Exception:
+            return False
 
     def get(self, name: str): return self.tools.get(name)
     def list_names(self) -> List[str]: return [n for n in self.tools if n not in self._disabled]
@@ -140,18 +149,24 @@ class ToolRegistry:
         }} for t in all_defs if t["name"] not in self._disabled]
 
     def _read(self, file_path="", path="", **kw) -> str:
-        p = Path(file_path or path).expanduser()
+        p = Path(file_path or path).expanduser().resolve()
+        if not self._is_within_workspace(p):
+            return "Error: access denied — path outside workspace"
         if not p.exists(): return f"Error: not found: {p}"
         try: return p.read_text(encoding="utf-8")
         except Exception as e: return f"Error: {e}"
 
     def _write(self, file_path="", path="", content="", **kw) -> str:
-        p = Path(file_path or path).expanduser()
+        p = Path(file_path or path).expanduser().resolve()
+        if not self._is_within_workspace(p):
+            return "Error: access denied — path outside workspace"
         try: p.parent.mkdir(parents=True, exist_ok=True); p.write_text(content, encoding="utf-8"); return f"Written: {p}"
         except Exception as e: return f"Error: {e}"
 
     def _edit(self, file_path="", path="", old_string="", new_string="", **kw) -> str:
-        p = Path(file_path or path).expanduser()
+        p = Path(file_path or path).expanduser().resolve()
+        if not self._is_within_workspace(p):
+            return "Error: access denied — path outside workspace"
         if not p.exists(): return f"Error: not found: {p}"
         text = p.read_text(encoding="utf-8")
         if old_string not in text: return "Error: old_string not found in file"
@@ -190,7 +205,9 @@ class ToolRegistry:
             return f"Error saving memory: {e}"
 
     def _list_dir(self, path=".", **kw) -> str:
-        p = Path(path).expanduser()
+        p = Path(path).expanduser().resolve()
+        if not self._is_within_workspace(p):
+            return "Error: access denied — path outside workspace"
         if not p.exists(): return f"Error: not found: {p}"
         if not p.is_dir(): return f"Error: not a directory: {p}"
         entries = []
@@ -214,7 +231,9 @@ class ToolRegistry:
             return f"Error: {e}"
 
     def _find_files(self, pattern="", path=".", **kw) -> str:
-        p = Path(path).expanduser()
+        p = Path(path).expanduser().resolve()
+        if not self._is_within_workspace(p):
+            return "Error: access denied — path outside workspace"
         if not p.exists(): return f"Error: not found: {p}"
         results = []
         try:
@@ -222,9 +241,11 @@ class ToolRegistry:
                 matches = list(p.glob(pattern))
             else:
                 matches = list(p.rglob(pattern))
+            # Filter out unwanted directories BEFORE slicing to 50
+            matches = [m for m in matches if not any(
+                x in str(m) for x in ['.git', '__pycache__', 'venv', 'node_modules']
+            )]
             for m in matches[:50]:
-                if '.git' in str(m) or '__pycache__' in str(m) or 'venv' in str(m) or 'node_modules' in str(m):
-                    continue
                 try:
                     rel = m.relative_to(p)
                 except ValueError:
@@ -235,7 +256,9 @@ class ToolRegistry:
             return f"Error: {e}"
 
     def _grep(self, pattern="", path=".", max_results=20, **kw) -> str:
-        p = Path(path).expanduser()
+        p = Path(path).expanduser().resolve()
+        if not self._is_within_workspace(p):
+            return "Error: access denied — path outside workspace"
         if not p.exists(): return f"Error: not found: {p}"
         results = []
         try:
