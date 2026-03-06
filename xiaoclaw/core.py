@@ -42,12 +42,18 @@ class XiaClawConfig:
 
     @classmethod
     def from_env(cls) -> "XiaClawConfig":
+        def _safe_int(env_var, default):
+            try:
+                return int(os.getenv(env_var, str(default)))
+            except ValueError:
+                logger.warning(f"Invalid integer in {env_var}, using default {default}")
+                return default
         return cls(
             debug=os.getenv("XIAOCLAW_DEBUG", "false").lower() == "true",
             security_level=os.getenv("XIAOCLAW_SECURITY", "strict"),
             workspace=os.getenv("XIAOCLAW_WORKSPACE", "."),
-            max_context_tokens=int(os.getenv("XIAOCLAW_MAX_TOKENS", "128000")),
-            compaction_threshold=int(os.getenv("XIAOCLAW_COMPACT_THRESHOLD", "6000")),
+            max_context_tokens=_safe_int("XIAOCLAW_MAX_TOKENS", 128000),
+            compaction_threshold=_safe_int("XIAOCLAW_COMPACT_THRESHOLD", 6000),
             api_key=os.getenv("OPENAI_API_KEY", ""),
             base_url=os.getenv("OPENAI_BASE_URL", "https://ai.ltcraft.cn:12000/v1"),
             default_model=os.getenv("XIAOCLAW_MODEL", "claude-opus-4-6"),
@@ -231,19 +237,21 @@ class XiaClaw:
                     ptype = "string"
                     if param.annotation != inspect.Parameter.empty:
                         ann = param.annotation
-                        if ann == int:
+                        # Check bool before int since bool is subclass of int
+                        if ann == bool:
+                            ptype = "boolean"
+                        elif ann == int:
                             ptype = "integer"
                         elif ann == float:
                             ptype = "number"
-                        elif ann == bool:
-                            ptype = "boolean"
                     elif param.default != inspect.Parameter.empty:
-                        if isinstance(param.default, int):
+                        # Check bool before int since bool is subclass of int
+                        if isinstance(param.default, bool):
+                            ptype = "boolean"
+                        elif isinstance(param.default, int):
                             ptype = "integer"
                         elif isinstance(param.default, float):
                             ptype = "number"
-                        elif isinstance(param.default, bool):
-                            ptype = "boolean"
                     props[pname] = {"type": ptype, "description": f"Parameter: {pname}"}
                     if param.default == inspect.Parameter.empty:
                         required.append(pname)
@@ -631,13 +639,12 @@ class XiaClaw:
                 )
             except Exception as e:
                 logger.error(f"LLM error after retries: {e}")
-                yield f"[LLM Error: {e}]"; return
+                yield f"[LLM Error: {type(e).__name__}]"; return
 
             usage = getattr(resp, 'usage', None)
             self.stats.record(usage)
             # Record analytics
             if usage:
-                import time
                 self.analytics.record(
                     model=self.providers.active.current_model,
                     provider=self.providers.active_name,
@@ -661,7 +668,7 @@ class XiaClaw:
                     except json.JSONDecodeError: args = {}
                     await self.hooks.fire("before_tool_call", tool=name, args=args)
                     self.security.log_tool_call(name, args)
-                    result = self.tools.call(name, args)
+                    result = str(self.tools.call(name, args) or "")
                     self.stats.record_tool()
                     await self.hooks.fire("after_tool_call", tool=name, args=args, result=result)
                     logger.info(f"Tool: {name}({list(args.keys())}) → {len(result)} chars")

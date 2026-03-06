@@ -1,9 +1,11 @@
 """xiaoclaw CLI — interactive terminal with setup wizard & slash completion"""
 import sys
 import os
+import re
 import logging
 import asyncio
 import readline
+import getpass
 from pathlib import Path
 
 from .core import XiaClaw, XiaClawConfig, VERSION
@@ -141,7 +143,7 @@ def _run_setup_wizard() -> XiaClawConfig:
 
     print()
     try:
-        api_key = input("  API Key: ").strip()
+        api_key = getpass.getpass("  API Key: ").strip()
     except (KeyboardInterrupt, EOFError):
         print("\n  已取消"); sys.exit(0)
 
@@ -164,16 +166,15 @@ def _run_setup_wizard() -> XiaClawConfig:
                 messages=[{"role": "user", "content": "hi"}],
                 max_tokens=5,
             )
-            return resp.choices[0].message.content
+            return True, resp.choices[0].message.content
         except Exception as e:
-            return None, str(e)
+            return False, str(e)
 
-    result = _aio.run(_test())
-    if isinstance(result, str):
+    success, msg = _aio.run(_test())
+    if success:
         print(f" ✅ 成功！({default_model})")
     else:
-        err = result[1] if isinstance(result, tuple) else str(result)
-        print(f" ❌ 失败: {err[:80]}")
+        print(f" ❌ 失败: {msg[:80]}")
         print()
         try:
             retry = input("  继续保存配置？(y/n): ").strip().lower()
@@ -259,13 +260,20 @@ async def _save_session_memory(claw):
 
 # ── Main ──────────────────────────────────────────────────────
 async def main():
+    # Config path override (parse first, before any branches that use it)
+    config_path = None
+    for i, arg in enumerate(sys.argv):
+        if arg == "--config" and i + 1 < len(sys.argv):
+            config_path = sys.argv[i + 1]
+
     if "--web" in sys.argv or "--webui" in sys.argv:
         _load_saved_config()
         config = XiaClawConfig.from_yaml(config_path) if config_path else XiaClawConfig.from_env()
         _run_webui(config)
         return
 
-
+    # Help text (now properly placed after --web check)
+    if "--help" in sys.argv or "-h" in sys.argv:
         print(f"xiaoclaw v{VERSION} — Lightweight AI Agent")
         print(f"  xiaoclaw              交互模式")
         print(f"  xiaoclaw --setup      运行设置向导")
@@ -274,15 +282,6 @@ async def main():
         print(f"  xiaoclaw --test       自检测试")
         print(f"  xiaoclaw --config X   指定配置文件")
         return
-
-    # Load saved config first
-    _load_saved_config()
-
-    # Config path override
-    config_path = None
-    for i, arg in enumerate(sys.argv):
-        if arg == "--config" and i + 1 < len(sys.argv):
-            config_path = sys.argv[i + 1]
 
     # Setup wizard
     if "--setup" in sys.argv or _needs_setup():
@@ -460,7 +459,9 @@ async def main():
                         lines.append(f"**{role}**: {content}\n")
                 out = "\n".join(lines)
                 ext = "md"
-            path = f"/tmp/xiaoclaw_export_{claw.session.session_id}.{ext}"
+            # Sanitize session_id to prevent path traversal
+            safe_id = re.sub(r'[^a-zA-Z0-9_-]', '', claw.session.session_id)
+            path = f"/tmp/xiaoclaw_export_{safe_id}.{ext}"
             Path(path).write_text(out, encoding="utf-8")
             print(f"  📄 已导出到 {path}")
             continue
@@ -541,4 +542,4 @@ def _run_webui(config):
     """Run Web UI mode."""
     from .webui import run_webui
     print(f"\n  🌐 启动 Web UI...\n")
-    run_webui(host="0.0.0.0", port=8080)
+    run_webui(config=config, host="0.0.0.0", port=8080)
