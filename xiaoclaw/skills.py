@@ -90,21 +90,39 @@ def parse_skill_md(content: str) -> SkillMeta:
 
 
 def should_activate(meta: SkillMeta, user_message: str) -> bool:
-    """Check if a skill should be activated based on user message."""
+    """Check if a skill should be activated based on user message.
+    
+    Requires at least 2 keyword matches OR a minimum match ratio to reduce false positives.
+    Common words like "the", "list", "show" alone won't trigger activation.
+    """
     if not meta.read_when:
         return False
 
     msg_lower = user_message.lower()
     conditions = meta.read_when.lower()
 
-    # Simple keyword matching from read_when
-    keywords = re.findall(r'\w+', conditions)
+    # Extract significant keywords (at least 4 chars to avoid common words)
+    keywords = [kw for kw in re.findall(r'\w+', conditions) if len(kw) >= 4]
+    if not keywords:
+        # Fall back to shorter keywords if none are >= 4 chars
+        keywords = [kw for kw in re.findall(r'\w+', conditions) if len(kw) >= 3]
+    
     if not keywords:
         return False
 
-    # Activate if any keyword matches
-    match_count = sum(1 for kw in keywords if kw in msg_lower and len(kw) > 2)
-    return match_count > 0
+    # Count matches
+    match_count = sum(1 for kw in keywords if kw in msg_lower)
+    
+    # Activate if:
+    # - At least 2 keywords match, OR
+    # - More than 50% of keywords match (but at least 1)
+    if match_count >= 2:
+        return True
+    if match_count >= 1 and len(keywords) > 0:
+        ratio = match_count / len(keywords)
+        return ratio > 0.5
+    
+    return False
 
 
 class SkillRegistry:
