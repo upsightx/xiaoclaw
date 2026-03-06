@@ -281,30 +281,49 @@ def register_builtin_skills(registry: SkillRegistry):
         import ast
         try:
             tree = ast.parse(code, mode='eval')
-            # Only allow safe node types
-            SAFE = (ast.Expression, ast.BinOp, ast.UnaryOp, ast.Num, ast.Str,
-                    ast.List, ast.Tuple, ast.Dict, ast.Set, ast.Constant,
-                    ast.Add, ast.Sub, ast.Mult, ast.Div, ast.Mod, ast.Pow,
-                    ast.FloorDiv, ast.USub, ast.UAdd, ast.Compare,
-                    ast.Eq, ast.NotEq, ast.Lt, ast.LtE, ast.Gt, ast.GtE,
-                    ast.BoolOp, ast.And, ast.Or, ast.Not, ast.IfExp,
-                    ast.Call, ast.Name, ast.Attribute, ast.Subscript, ast.Index, ast.Slice,
-                    ast.Load, ast.Store, ast.Del, ast.Starred, ast.FormattedValue,
-                    ast.JoinedStr, ast.keyword)
+            # Only allow safe node types - NO Call, Name, Attribute, Subscript
+            # These can be used to escape the sandbox
+            SAFE = (
+                ast.Expression, ast.BinOp, ast.UnaryOp, 
+                # Numeric and string literals
+                ast.Constant,  # Python 3.8+ (replaces ast.Num, ast.Str)
+                ast.List, ast.Tuple, ast.Dict, ast.Set,
+                # Operators
+                ast.Add, ast.Sub, ast.Mult, ast.Div, ast.Mod, ast.Pow,
+                ast.FloorDiv, ast.USub, ast.UAdd,
+                # Comparison
+                ast.Compare,
+                ast.Eq, ast.NotEq, ast.Lt, ast.LtE, ast.Gt, ast.GtE,
+                # Boolean
+                ast.BoolOp, ast.And, ast.Or, ast.Not, ast.IfExp,
+                # Others
+                ast.Load, ast.Slice,
+                # Formatted strings (f-strings) - but NOT calls within them
+                ast.JoinedStr, ast.FormattedValue,
+            )
             for node in ast.walk(tree):
                 if not isinstance(node, SAFE):
                     return f"Error: unsafe expression ({type(node).__name__})"
-            # Restricted builtins
-            safe_builtins = {"abs": abs, "len": len, "min": min, "max": max,
-                             "sum": sum, "round": round, "sorted": sorted,
-                             "int": int, "float": float, "str": str, "bool": bool,
-                             "list": list, "dict": dict, "set": set, "tuple": tuple,
-                             "range": range, "enumerate": enumerate, "zip": zip,
-                             "True": True, "False": False, "None": None}
+            # Restricted builtins - only pure functions
+            safe_builtins = {
+                "abs": abs, "len": len, "min": min, "max": max,
+                "sum": sum, "round": round, "sorted": sorted,
+                "int": int, "float": float, "str": str, "bool": bool,
+                "list": list, "dict": dict, "set": set, "tuple": tuple,
+                "range": range, "enumerate": enumerate, "zip": zip,
+                "True": True, "False": False, "None": None,
+                # String methods that don't execute code
+                "upper": str.upper, "lower": str.lower, "strip": str.strip,
+                "split": str.split, "join": str.join, "replace": str.replace,
+                "startswith": str.startswith, "endswith": str.endswith,
+                "count": str.count, "find": str.find, "format": str.format,
+            }
             result = eval(compile(tree, '<expr>', 'eval'), {"__builtins__": {}}, safe_builtins)
             return str(result)
         except SyntaxError:
             return "Error: invalid syntax"
+        except ZeroDivisionError:
+            return "Error: division by zero"
         except Exception as e:
             return f"Error: {e}"
 

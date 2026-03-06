@@ -2,7 +2,7 @@
 import re
 import logging
 from typing import Dict, List
-from urllib.parse import quote_plus
+from urllib.parse import quote_plus, urlparse
 
 try:
     import requests
@@ -15,6 +15,55 @@ logger = logging.getLogger("xiaoclaw.Web")
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (compatible; xiaoclaw/0.3; +https://github.com/upsightx/xiaoclaw)"
 }
+
+# Blocked IP ranges for SSRF prevention
+BLOCKED_HOSTS = {
+    'localhost', '127.0.0.1', '::1',
+    '0.0.0.0', '0.0.0.0/8', '127.0.0.0/8',
+    '169.254.169.254',  # Cloud metadata
+    '169.254.169.254/32',
+    'metadata.google.internal',  # GCP
+    'metadata.google',
+}
+
+
+def _is_internal_url(url: str) -> bool:
+    """Check if URL points to internal/private network."""
+    try:
+        parsed = urlparse(url)
+        hostname = parsed.hostname.lower() if parsed.hostname else ""
+        port = parsed.port
+        
+        # Block localhost variants
+        if hostname in ('localhost', '127.0.0.1', '::1'):
+            return True
+        
+        # Block cloud metadata endpoints
+        if hostname.startswith('169.254.'):
+            return True
+        if hostname in ('metadata.google.internal', 'metadata.google'):
+            return True
+        
+        # Block private IP ranges (RFC 1918)
+        if hostname.startswith(('10.', '192.168.', '172.')):
+            if hostname.startswith('172.'):
+                # 172.16.0.0/12
+                try:
+                    second = int(hostname.split('.')[1])
+                    if 16 <= second <= 31:
+                        return True
+                except (ValueError, IndexError):
+                    pass
+            else:
+                return True
+        
+        # Block internal ports on any host
+        if port and port in (22, 23, 25, 3306, 5432, 6379, 27017, 11211):
+            return True
+            
+        return False
+    except Exception:
+        return True  # Block on any parsing error
 
 
 def web_search(query: str, count: int = 5, **kw) -> str:
@@ -64,16 +113,37 @@ def web_fetch(url: str, max_chars: int = 8000, **kw) -> str:
     if not url.strip():
         return "[Error: empty URL]"
 
+    # SSRF protection: block internal URLs
+    if _is_internal_url(url):
+        logger.warning(f"SSRF blocked: {url}")
+        return "[Error: internal URLs not allowed]"
+
     try:
-        resp = requests.get(url, headers=HEADERS, timeout=15, allow_redirects=True)
+        # Use stream to limit response size
+        resp = requests.get(url, headers=HEADERS, timeout=15, allow_redirects=True, stream=True)
         resp.raise_for_status()
+        
+        # Check content-length header
+        content_length = resp.headers.get("content-length")
+        if content_length:
+            try:
+                cl = int(content_length)
+                if cl > max_chars * 2:  # Allow some overhead
+                    logger.warning(f"Response too large: {cl} bytes")
+                    return f"[Error: response too large ({cl} bytes), max {max_chars}]"
+            except ValueError:
+                pass
+        
+        # Read with limit
+        content = resp.raw.read(max_chars + 1024, decode_content=True)
+        text = content.decode('utf-8', errors='ignore')
+        
         content_type = resp.headers.get("content-type", "")
 
         if "json" in content_type:
-            return resp.text[:max_chars]
+            return text[:max_chars]
 
         # HTML → extract text
-        text = resp.text
         # Remove script/style
         text = re.sub(r'<(script|style)[^>]*>.*?</\1>', '', text, flags=re.DOTALL | re.IGNORECASE)
         # Remove tags
