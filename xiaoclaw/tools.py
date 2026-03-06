@@ -399,8 +399,14 @@ class ToolRegistry:
         """Create a new custom skill in the skills directory."""
         if not name or not code:
             return "Error: name and code are required"
+        # Sanitize name to prevent path traversal
+        name = re.sub(r'[^a-zA-Z0-9_-]', '', name)
+        if not name:
+            return "Error: name contains only invalid characters"
         if not tool_name:
             tool_name = name.replace("-", "_")
+        # Sanitize tool_name
+        tool_name = re.sub(r'[^a-zA-Z0-9_]', '', tool_name)
         if not tool_description:
             tool_description = description or f"Custom tool: {tool_name}"
         if not description:

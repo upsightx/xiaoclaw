@@ -9,11 +9,24 @@ logger = logging.getLogger("xiaoclaw")
 
 # ─── Security ─────────────────────────────────────────
 
-DANGEROUS = [
+import re as _re
+
+DANGEROUS_EXACT = [
     "rm -rf", "rm -r -f", "rm -fr", "dd if=", "mkfs", "> /dev/",
     "format c:", "del /f", "find / -delete", "chmod -R 777",
-    ":(){ :|:& };:", "wget", "curl.*|.*sh", ">/dev/sda",
+    ":(){ :|:& };:", ">/dev/sda",
     "shred -u", "mv /dev/null", "ln -s /dev/null",
+]
+
+# Regex patterns for more complex dangerous commands
+DANGEROUS_REGEX = [
+    _re.compile(r'curl\s.*\|\s*(?:ba)?sh', _re.IGNORECASE),
+    _re.compile(r'wget\s.*\|\s*(?:ba)?sh', _re.IGNORECASE),
+    _re.compile(r'wget\s+-O\s*-', _re.IGNORECASE),
+    _re.compile(r'python[23]?\s+-c\s+.*(?:import\s+os|subprocess|shutil\.rmtree)', _re.IGNORECASE),
+    _re.compile(r'>\s*/dev/sd[a-z]', _re.IGNORECASE),
+    _re.compile(r'rm\s+-[a-z]*r[a-z]*f', _re.IGNORECASE),
+    _re.compile(r'rm\s+-[a-z]*f[a-z]*r', _re.IGNORECASE),
 ]
 
 
@@ -28,7 +41,12 @@ class SecurityManager:
     def is_dangerous(self, action: str) -> bool:
         if self.level == "relaxed":
             return False
-        dangerous = any(p in action.lower() for p in DANGEROUS)
+        lower = action.lower()
+        # Check exact substring matches
+        dangerous = any(p in lower for p in DANGEROUS_EXACT)
+        # Check regex patterns
+        if not dangerous:
+            dangerous = any(r.search(action) for r in DANGEROUS_REGEX)
         if dangerous:
             self._audit("BLOCKED", action)
         return dangerous

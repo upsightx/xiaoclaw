@@ -35,7 +35,7 @@ def _is_internal_url(url: str) -> bool:
         port = parsed.port
         
         # Block localhost variants
-        if hostname in ('localhost', '127.0.0.1', '::1'):
+        if hostname in ('localhost', '127.0.0.1', '::1', '0.0.0.0', '[::1]'):
             return True
         
         # Block cloud metadata endpoints

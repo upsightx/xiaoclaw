@@ -255,22 +255,24 @@ class BattleToolWrapper:
     def __init__(self, provider):
         self.engine = BattleEngine(provider)
 
+    def _run_async(self, coro):
+        """Run an async coroutine from a sync context, handling running loops."""
+        try:
+            asyncio.get_running_loop()
+            # We're inside a running loop — use a thread to run a new loop
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                return pool.submit(asyncio.run, coro).result(timeout=120)
+        except RuntimeError:
+            # No running loop — safe to use asyncio.run directly
+            return asyncio.run(coro)
+
     def battle(self, question: str = "", roles: str = "", **kw) -> str:
         if not question:
             return "Error: question is required"
         role_keys = [r.strip() for r in roles.split(",") if r.strip()] if roles else None
         try:
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                import concurrent.futures
-                with concurrent.futures.ThreadPoolExecutor() as pool:
-                    result = pool.submit(
-                        lambda: asyncio.run(self.engine.battle(question, role_keys=role_keys))
-                    ).result(timeout=120)
-            else:
-                result = loop.run_until_complete(
-                    self.engine.battle(question, role_keys=role_keys)
-                )
+            result = self._run_async(self.engine.battle(question, role_keys=role_keys))
             return result["formatted"]
         except Exception as e:
             return f"Battle failed: {e}"
@@ -278,23 +280,12 @@ class BattleToolWrapper:
     def battle_custom(self, question: str = "", roles_json: str = "", **kw) -> str:
         if not question:
             return "Error: question is required"
-        import json
         try:
             custom_roles = json.loads(roles_json) if roles_json else []
         except Exception:
             return "Error: roles_json must be valid JSON array"
         try:
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                import concurrent.futures
-                with concurrent.futures.ThreadPoolExecutor() as pool:
-                    result = pool.submit(
-                        lambda: asyncio.run(self.engine.battle(question, custom_roles=custom_roles))
-                    ).result(timeout=120)
-            else:
-                result = loop.run_until_complete(
-                    self.engine.battle(question, custom_roles=custom_roles)
-                )
+            result = self._run_async(self.engine.battle(question, custom_roles=custom_roles))
             return result["formatted"]
         except Exception as e:
             return f"Battle failed: {e}"

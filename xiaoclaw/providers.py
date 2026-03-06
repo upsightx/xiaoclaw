@@ -140,7 +140,7 @@ class ProviderManager:
             for n, p in self.providers.items()
         ]
 
-    async def chat_with_failover(self, messages: List[Dict], **kwargs) -> str:
+    async def chat_with_failover(self, messages: List[Dict], **kwargs) -> Any:
         """Try active provider, failover to others on failure."""
         tried = set()
         for name in [self.active_name] + [n for n in self.providers if n != self.active_name]:

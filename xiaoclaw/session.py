@@ -12,7 +12,12 @@ try:
 except ImportError:
     HAS_TIKTOKEN = False
 
+import re as _re
+
 logger = logging.getLogger("xiaoclaw.Session")
+
+# Regex for valid session IDs (alphanumeric, hyphens, underscores)
+_SAFE_SESSION_ID = _re.compile(r'^[a-zA-Z0-9_-]+$')
 
 DEFAULT_SESSIONS_DIR = Path(".xiaoclaw/sessions")
 
@@ -49,7 +54,9 @@ class Session:
     """A single conversation session with JSONL persistence."""
 
     def __init__(self, session_id: str = "", sessions_dir: Path = DEFAULT_SESSIONS_DIR):
-        self.session_id = session_id or str(uuid.uuid4())[:8]
+        raw_id = session_id or str(uuid.uuid4())[:8]
+        # Sanitize session_id to prevent path traversal
+        self.session_id = _re.sub(r'[^a-zA-Z0-9_-]', '', raw_id) or str(uuid.uuid4())[:8]
         self.sessions_dir = sessions_dir
         self.messages: List[Dict[str, Any]] = []
         self.metadata: Dict[str, Any] = {
@@ -72,7 +79,7 @@ class Session:
         self.metadata["updated_at"] = time.time()
         # Ensure metadata line exists on first write
         if not self._file.exists():
-            self._append_line({"_meta": True, **self.metadata})
+            self._append_line({"_xc_meta": True, **self.metadata})
         self._append_line(msg)
         return msg
 

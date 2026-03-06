@@ -305,6 +305,5 @@ class Analytics:
             for d in stats['daily'][-7:]:  # 最近 7 天
                 bar = "█" * min(20, d['tokens'] // 1000)
                 lines.append(f"  {d['date']}: {d['calls']:>3} calls | {d['tokens']:>7,} tokens | {d['success_rate']:.0f}% {bar}")
-                lines.append(f"  {d['date']}: {d['calls']:>3} 次 | {d['tokens']:>7,} tokens | {d['success_rate']:.0f}% {bar}")
         
         return "\n".join(lines)

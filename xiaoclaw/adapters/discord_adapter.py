@@ -76,25 +76,26 @@ class DiscordAdapter:
             # Sanitize log output
             safe_text = text[:80].replace('\n', '\\n').replace('\r', '\\r')
             logger.info("Discord [%s]: %s", message.author, safe_text)
-            
-            # Use per-user session
-            user_id = str(message.author.id)
-            if user_id not in self._sessions:
-                self._sessions[user_id] = self.claw.session_mgr.new_session()
-            
-            old_session = self.claw.session
-            self.claw.session = self._sessions[user_id]
+
             try:
-                reply = await self.claw.handle_message(text, user_id=user_id)
-            finally:
-                self.claw.session = old_session
-            
-            # Discord has 2000 char limit
-            for i in range(0, len(reply), 1900):
-                await message.reply(reply[i:i + 1900])
-        except Exception as e:
-            logger.error(f"Discord handle error: {e}")
-            await message.reply("❌ Something went wrong, please try again.")
+                # Use per-user session
+                user_id = str(message.author.id)
+                if user_id not in self._sessions:
+                    self._sessions[user_id] = self.claw.session_mgr.new_session()
+
+                old_session = self.claw.session
+                self.claw.session = self._sessions[user_id]
+                try:
+                    reply = await self.claw.handle_message(text, user_id=user_id)
+                finally:
+                    self.claw.session = old_session
+
+                # Discord has 2000 char limit
+                for i in range(0, len(reply), 1900):
+                    await message.reply(reply[i:i + 1900])
+            except Exception as e:
+                logger.error(f"Discord handle error: {e}")
+                await message.reply("❌ Something went wrong, please try again.")
 
         @bot.command(name="tools")
         async def cmd_tools(ctx):

@@ -6,12 +6,13 @@ from datetime import datetime
 
 logger = logging.getLogger("xiaoclaw.WebUI")
 
+from dataclasses import asdict
+
 try:
     from fastapi import FastAPI, HTTPException, Request
     from fastapi.responses import HTMLResponse, StreamingResponse, JSONResponse
     from fastapi.staticfiles import StaticFiles
     from pydantic import BaseModel
-from dataclasses import asdict
     import json
     HAS_FASTAPI = True
 except ImportError:
@@ -395,11 +396,10 @@ def create_webui(claw=None):
 
     @app.get("/api/model")
     async def get_model():
-        cfg = claw.config
-        provider = cfg.providers.get(cfg.active_provider, {})
+        p = claw.providers.active
         return {
-            "model": provider.get("default_model", "unknown"),
-            "provider": cfg.active_provider
+            "model": p.current_model if p else "unknown",
+            "provider": claw.providers.active_name or "none"
         }
 
     @app.post("/api/chat")
@@ -436,23 +436,32 @@ def create_webui(claw=None):
 
     @app.post("/api/settings")
     async def update_settings(req: SettingsRequest):
-        """Update runtime settings (requires restart for full effect)."""
-        if req.base_url:
-            claw.config.providers[claw.config.active_provider]["base_url"] = req.base_url
-        if req.api_key:
-            claw.config.providers[claw.config.active_provider]["api_key"] = req.api_key
-        if req.model:
-            claw.config.providers[claw.config.active_provider]["default_model"] = req.model
+        """Update runtime settings at runtime."""
+        from .providers import ProviderConfig
+        if req.model and claw.providers.active:
+            claw.providers.active.current_model = req.model
+        if req.base_url or req.api_key:
+            claw.providers.add(ProviderConfig(
+                name="default",
+                api_key=req.api_key or (claw.providers.active.config.api_key if claw.providers.active else ""),
+                base_url=req.base_url or (claw.providers.active.config.base_url if claw.providers.active else ""),
+                models=[req.model or claw.config.default_model],
+                default_model=req.model or claw.config.default_model,
+            ))
         return {"status": "ok"}
 
     @app.get("/api/analytics")
     async def get_analytics(days: int = 7):
         """Get analytics for recent days."""
+        days = max(1, min(days, 365))
         return claw.analytics.get_recent_stats(days)
 
     @app.get("/api/analytics/daily/{date}")
     async def get_daily_analytics(date: str):
         """Get analytics for a specific date."""
+        import re
+        if not re.match(r'^\d{4}-\d{2}-\d{2}$', date):
+            return {"error": "Invalid date format, use YYYY-MM-DD"}
         daily = claw.analytics.get_daily_stats(date)
         return asdict(daily) if daily else {"error": "No data for date"}
 
@@ -464,7 +473,7 @@ def create_webui(claw=None):
     return app
 
 
-def run_webui(host: str = "0.0.0.0", port: int = 8080):
+def run_webui(config=None, host: str = "0.0.0.0", port: int = 8080):
     """Run the Web UI server."""
     if not HAS_FASTAPI:
         print("Error: FastAPI not installed. pip install fastapi uvicorn")
@@ -474,7 +483,9 @@ def run_webui(host: str = "0.0.0.0", port: int = 8080):
     except ImportError:
         print("Error: uvicorn not installed. pip install uvicorn")
         return
-    
+
+    from .core import XiaClaw
+    claw = XiaClaw(config) if config else None
     print(f"🐾 xiaoclaw Web UI starting at http://{host}:{port}")
-    app = create_webui()
+    app = create_webui(claw=claw)
     uvicorn.run(app, host=host, port=port)

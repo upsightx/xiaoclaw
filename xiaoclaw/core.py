@@ -336,22 +336,15 @@ class XiaClaw:
         def _factory():
             return XiaClaw(self.config)
 
-        # Run spawn_and_wait synchronously via the running event loop
+        # Schedule the spawn coroutine on the running event loop.
+        # Since this sync function is called from within an async context,
+        # we use ensure_future to schedule without awaiting.
         import asyncio
         try:
-            loop = asyncio.get_running_loop()
-            # We're inside an async context, use create_task + a future
-            future = asyncio.ensure_future(
-                self.subagents.spawn_and_wait(task, _factory, timeout=45)
-            )
-            # Can't await here since we're in a sync function called from async
-            # Instead, spawn and return task_id for later retrieval
-            task_id_future = asyncio.ensure_future(
+            asyncio.ensure_future(
                 self.subagents.spawn(task, _factory)
             )
-            # Block briefly to get the task_id
-            # This is a workaround — in practice the tool call is sync
-            return f"Sub-agent spawned. Use subagent_result to check. Note: sub-agent is processing the task: {task[:100]}"
+            return f"Sub-agent spawned for task: {task[:100]}. Use subagent_result to check progress."
         except Exception as e:
             return f"Error spawning sub-agent: {e}"
 

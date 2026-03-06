@@ -518,6 +518,18 @@ async def main():
             print(result["formatted"])
             continue
 
+        # Analytics
+        if cmd == "/analytics":
+            parts = user_input.split()
+            days = 7
+            if len(parts) >= 2:
+                try:
+                    days = int(parts[1])
+                except ValueError:
+                    pass
+            print(claw.analytics.print_report(days))
+            continue
+
         # Unknown slash command
         if user_input.startswith("/") and cmd not in SLASH_COMMANDS:
             close = [c for c in SLASH_COMMANDS if c.startswith(cmd[:3])]
