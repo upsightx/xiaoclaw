@@ -74,15 +74,35 @@ class PluginManager:
 
         # Extract tools: module.TOOLS = {"name": callable}
         if hasattr(module, 'TOOLS'):
-            info.tools = dict(module.TOOLS)
+            raw_tools = dict(module.TOOLS)
         elif hasattr(module, 'get_tools'):
-            info.tools = dict(module.get_tools())
+            raw_tools = dict(module.get_tools())
+        else:
+            raw_tools = {}
+        
+        # Validate that tools are callable
+        info.tools = {}
+        for tool_name, tool_func in raw_tools.items():
+            if callable(tool_func):
+                info.tools[tool_name] = tool_func
+            else:
+                logger.warning(f"Plugin '{name}' tool '{tool_name}' is not callable, skipping")
 
         # Extract hooks: module.HOOKS = {"event": callable}
         if hasattr(module, 'HOOKS'):
-            info.hooks = dict(module.HOOKS)
+            raw_hooks = dict(module.HOOKS)
         elif hasattr(module, 'get_hooks'):
-            info.hooks = dict(module.get_hooks())
+            raw_hooks = dict(module.get_hooks())
+        else:
+            raw_hooks = {}
+        
+        # Validate that hooks are callable
+        info.hooks = {}
+        for hook_name, hook_func in raw_hooks.items():
+            if callable(hook_func):
+                info.hooks[hook_name] = hook_func
+            else:
+                logger.warning(f"Plugin '{name}' hook '{hook_name}' is not callable, skipping")
 
         # Call setup if exists
         if hasattr(module, 'setup'):
@@ -116,9 +136,20 @@ class PluginManager:
     def get_all_tools(self) -> Dict[str, Callable]:
         """Get all tools from enabled plugins."""
         tools = {}
+        collisions = {}
         for p in self.plugins.values():
             if p.enabled:
-                tools.update(p.tools)
+                for tool_name, tool_func in p.tools.items():
+                    if tool_name in tools:
+                        collisions.setdefault(tool_name, []).append(p.name)
+                    else:
+                        tools[tool_name] = tool_func
+        
+        # Log collisions
+        if collisions:
+            for tool_name, plugin_names in collisions.items():
+                logger.warning(f"Tool '{tool_name}' collision: {plugin_names[0]} overwritten by {plugin_names[1]}")
+        
         return tools
 
     def get_all_hooks(self) -> Dict[str, List[Callable]]:

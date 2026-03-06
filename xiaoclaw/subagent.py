@@ -45,10 +45,13 @@ class SubagentManager:
             task_id for tracking
         """
         task_id = str(uuid.uuid4())[:8]
+        
+        # Create result object and store immediately to avoid closure issues
         result = SubagentResult(task_id=task_id, task=task, status="running")
         self._tasks[task_id] = result
 
-        async def _run():
+        async def _run(task_id: str, result: SubagentResult):
+            """Inner async function with explicit parameter binding."""
             try:
                 claw = claw_factory()
                 if model and claw.providers.active:
@@ -75,8 +78,11 @@ class SubagentManager:
                 result.error = str(e)
                 result.status = "error"
                 logger.error(f"Subagent {task_id} failed: {e}")
+            finally:
+                # Clean up running task reference to prevent memory leak
+                self._running.pop(task_id, None)
 
-        atask = asyncio.create_task(_run())
+        atask = asyncio.create_task(_run(task_id, result))
         self._running[task_id] = atask
         return task_id
 
@@ -87,10 +93,18 @@ class SubagentManager:
             try:
                 await asyncio.wait_for(atask, timeout=timeout)
             except asyncio.TimeoutError:
+                # Cancel the task on timeout
+                atask.cancel()
+                try:
+                    await atask
+                except asyncio.CancelledError:
+                    pass
                 result = self._tasks.get(task_id)
                 if result:
                     result.status = "error"
                     result.error = "Timed out"
+                # Clean up
+                self._running.pop(task_id, None)
         return self._tasks.get(task_id, SubagentResult(task_id=task_id, task="", status="error", error="Not found"))
 
     async def spawn_and_wait(self, task: str, claw_factory, model: str = None, timeout: float = 60) -> str:
