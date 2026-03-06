@@ -7,11 +7,13 @@ import asyncio
 import re
 import json
 import logging
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Any
 
 logger = logging.getLogger("xiaoclaw.Battle")
+
+# Pre-compiled regex for stripping <think> tags (used in hot path)
+_THINK_RE = re.compile(r'<think>.*?</think>\s*', re.DOTALL)
 
 
 # ─── Role 定义 ────────────────────────────────────────
@@ -99,9 +101,7 @@ class BattleEngine:
                 max_tokens=role.max_tokens,
             )
             content = resp.choices[0].message.content or ""
-            # 清理 <think> 标签
-            import re
-            content = re.sub(r'<think>.*?</think>\s*', '', content, flags=re.DOTALL).strip()
+            content = _THINK_RE.sub('', content).strip()
             return {"name": role.name, "emoji": role.emoji, "content": content}
         except Exception as e:
             logger.error(f"Role '{role.name}' failed: {e}")
@@ -127,8 +127,7 @@ class BattleEngine:
                 max_tokens=500,
             )
             content = resp.choices[0].message.content or ""
-            import re
-            content = re.sub(r'<think>.*?</think>\s*', '', content, flags=re.DOTALL).strip()
+            content = _THINK_RE.sub('', content).strip()
             return content
         except Exception as e:
             logger.error(f"Moderator failed: {e}")
@@ -236,7 +235,6 @@ def tool_battle_custom(question: str = "", roles_json: str = "", **kw) -> str:
     """同步包装：执行自定义角色battle。"""
     if not question:
         return "Error: question is required"
-    import json
     try:
         custom_roles = json.loads(roles_json) if roles_json else []
     except Exception:

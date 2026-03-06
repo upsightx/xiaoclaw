@@ -4,7 +4,9 @@ import os
 import re
 import json
 import asyncio
+import inspect
 import logging
+from datetime import datetime
 from pathlib import Path
 from typing import Dict, Any, Optional, List
 from dataclasses import dataclass
@@ -26,6 +28,9 @@ logger = logging.getLogger("xiaoclaw")
 logging.getLogger("httpx").setLevel(logging.WARNING)
 
 VERSION = "0.3.1"
+
+# Pre-compiled regex for stripping <think> tags (used in hot path)
+_THINK_RE = re.compile(r'<think>.*?</think>\s*', re.DOTALL)
 
 # ─── Config ───────────────────────────────────────────
 
@@ -180,6 +185,10 @@ class XiaClaw:
         # Bootstrap system prompt (lazy: only on first use)
         self._bootstrap_context: Optional[str] = None
 
+        # Cached system prompt and tool definitions (invalidated on config/skill changes)
+        self._cached_system_prompt: Optional[str] = None
+        self._cached_openai_functions: Optional[List[Dict]] = None
+
         # Config hot-reload watcher
         self._config_path: Optional[str] = None
         self._config_mtime: float = 0
@@ -188,8 +197,6 @@ class XiaClaw:
 
     def _register_skill_tools(self):
         """Register all skill tools into the tool registry so LLM can call them via function calling."""
-        import inspect
-
         skill_tool_params = {
             "calc": {
                 "type": "object",
@@ -405,6 +412,17 @@ class XiaClaw:
             self._user_sessions[user_id] = self.session_mgr.new_session(f"user-{user_id[:8]}")
         return self._user_sessions[user_id]
 
+    def _get_openai_functions(self) -> List[Dict]:
+        """Cached openai function definitions."""
+        if self._cached_openai_functions is None:
+            self._cached_openai_functions = self.tools.openai_functions()
+        return self._cached_openai_functions
+
+    def _invalidate_caches(self):
+        """Invalidate cached system prompt and tool definitions."""
+        self._cached_system_prompt = None
+        self._cached_openai_functions = None
+
     def _check_config_reload(self):
         """Auto-reload config if file changed (hot-reload)."""
         if not self._config_path:
@@ -416,11 +434,19 @@ class XiaClaw:
                 if mtime > self._config_mtime:
                     self._config_mtime = mtime
                     self.reload_config(self._config_path)
+                    self._invalidate_caches()
                     logger.info("Config hot-reloaded")
         except Exception:
             pass
 
     def _system_prompt(self) -> str:
+        if self._cached_system_prompt is not None:
+            return self._cached_system_prompt
+        prompt = self._build_system_prompt()
+        self._cached_system_prompt = prompt
+        return prompt
+
+    def _build_system_prompt(self) -> str:
         template_file = self.workspace / ".xiaoclaw" / "prompt.txt"
         if template_file.exists():
             try:
@@ -591,10 +617,12 @@ class XiaClaw:
         max_rounds = 20
         client = self.providers.active.client
         model = self.providers.active.current_model
+        tool_defs = self._get_openai_functions()
+        sys_msg = {"role": "system", "content": sys_prompt}
 
         for round_num in range(max_rounds):
             ctx = self.session.get_context_window(self.config.max_context_tokens)
-            all_msgs = [{"role": "system", "content": sys_prompt}] + ctx
+            all_msgs = [sys_msg] + ctx
 
             if stream and round_num > 0:
                 # After tool calls, try streaming the final response directly
@@ -602,7 +630,7 @@ class XiaClaw:
                     full = ""
                     async for chunk in await client.chat.completions.create(
                         model=model, messages=all_msgs,
-                        tools=self.tools.openai_functions(),
+                        tools=tool_defs,
                         max_tokens=2000, stream=True,
                     ):
                         if not chunk.choices:
@@ -610,7 +638,6 @@ class XiaClaw:
                         delta = chunk.choices[0].delta
                         # If streaming returns tool_calls, fall back to non-stream
                         if delta.tool_calls:
-                            # Can't handle tool_calls in stream easily, break and retry non-stream
                             full = None
                             break
                         content = delta.content or ""
@@ -618,7 +645,7 @@ class XiaClaw:
                             full += content
                             yield content
                     if full is not None:
-                        text = re.sub(r'<think>.*?</think>\s*', '', full, flags=re.DOTALL).strip()
+                        text = _THINK_RE.sub('', full).strip()
                         if text:
                             self.session.add_message("assistant", text)
                         return
@@ -628,7 +655,7 @@ class XiaClaw:
             try:
                 resp = await self._llm_call_with_retry(
                     client, model, all_msgs,
-                    tools=self.tools.openai_functions(), max_tokens=2000,
+                    tools=tool_defs, max_tokens=2000,
                 )
             except Exception as e:
                 logger.error(f"LLM error after retries: {e}")
@@ -681,7 +708,7 @@ class XiaClaw:
 
             # Final text response (no tool calls)
             text = choice.message.content or ""
-            text = re.sub(r'<think>.*?</think>\s*', '', text, flags=re.DOTALL).strip()
+            text = _THINK_RE.sub('', text).strip()
             if text:
                 self.session.add_message("assistant", text)
 
