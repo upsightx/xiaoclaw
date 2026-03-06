@@ -103,6 +103,16 @@ class RateLimiter:
         calls = [t for t in self._calls.get(key, []) if now - t < self.window]
         return max(0, self.max_calls - len(calls))
 
+    def wait_time(self, key: str = "default") -> float:
+        """Return seconds to wait before a slot becomes available."""
+        now = _time.time()
+        calls = sorted([t for t in self._calls.get(key, []) if now - t < self.window])
+        if len(calls) < self.max_calls:
+            return 0
+        # Time until oldest call expires
+        oldest = calls[0]
+        return max(0, self.window - (now - oldest))
+
 
 # ─── Token Stats ──────────────────────────────────────
 
