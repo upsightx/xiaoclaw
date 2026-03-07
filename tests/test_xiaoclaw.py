@@ -101,9 +101,9 @@ class TestTools:
         assert "Error" not in result or len(result) > 0
 
     def test_write_read(self, claw):
-        result = claw.tools.call("write", {"file_path": "/tmp/test_xc.txt", "content": "hello"})
+        result = claw.tools.call("write", {"file_path": "/tmp/test_xiaoclaw/test_xc.txt", "content": "hello"})
         assert "Written" in result
-        result = claw.tools.call("read", {"file_path": "/tmp/test_xc.txt"})
+        result = claw.tools.call("read", {"file_path": "/tmp/test_xiaoclaw/test_xc.txt"})
         assert "hello" in result
 
     def test_exec(self, claw):

@@ -156,7 +156,7 @@ class XiaClaw:
         self.stats = TokenStats()
         self.memory = MemoryManager(self.workspace)
         self.analytics = Analytics()
-        self.tools = ToolRegistry(self.security, memory=self.memory, skills_registry=None)  # set after skills init
+        self.tools = ToolRegistry(self.security, memory=self.memory, skills_registry=None, workspace=self.workspace)  # set after skills init
         self.hooks = HookManager()
         self.session_mgr = SessionManager(self.workspace / ".xiaoclaw" / "sessions")
         self.session = self.session_mgr.new_session()
