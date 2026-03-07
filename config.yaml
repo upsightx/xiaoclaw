@@ -1,0 +1,41 @@
+# xiaoclaw 配置文件
+# 环境变量优先级高于此文件
+
+agent:
+  debug: false
+  security: strict
+  workspace: "."
+  max_context_tokens: 128000
+  compaction_threshold: 6000
+
+# Provider配置
+active_provider: default
+
+providers:
+  default:
+    type: openai
+    api_key: "test-key"
+    base_url: "https://ai.ltcraft.cn:12000/v1"
+    default_model: "claude-opus-4-6"
+    models:
+      - claude-opus-4-6
+
+  minimax:
+    type: openai
+    api_key: "${MINIMAX_API_KEY}"
+    base_url: "https://api.minimax.chat/v1"
+    default_model: "MiniMax-M2.5"
+    models:
+      - MiniMax-M2.5
+
+  openai:
+    type: openai
+    api_key: "test-key"
+    base_url: "https://api.openai.com/v1"
+    default_model: "gpt-4o"
+    models:
+      - gpt-4o
+      - gpt-4o-mini
+
+# Skills目录
+skills_dir: "./skills"

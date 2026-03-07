@@ -10,7 +10,7 @@ FAIL=0
 DIR="/tmp/xc-stress-$$"
 mkdir -p "$DIR"
 
-ENV_ARGS="-e OPENAI_API_KEY=sk-iHus2xPomk0gCRPcqhxbLOw8zffMUeg7pryj1qnO5Cb698pW -e OPENAI_BASE_URL=https://ai.ltcraft.cn:12000/v1 -e XIAOCLAW_MODEL=claude-opus-4-6"
+ENV_ARGS="-e OPENAI_API_KEY=${OPENAI_API_KEY:-sk-test} -e OPENAI_BASE_URL=${OPENAI_BASE_URL:-https://api.openai.com/v1} -e XIAOCLAW_MODEL=${XIAOCLAW_MODEL:-gpt-4o}"
 
 echo "🐾 xiaoclaw Docker 并发压力测试"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"

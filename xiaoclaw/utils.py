@@ -94,6 +94,7 @@ class RateLimiter:
         self.max_calls = max_calls
         self.window = window_sec
         self._calls: Dict[str, List[float]] = {}
+        self._lock = asyncio.Lock()  # For thread-safe operations
 
     def check(self, key: str = "default") -> bool:
         now = _time.time()
@@ -105,6 +106,11 @@ class RateLimiter:
         # Cleanup: remove keys with empty call lists to prevent memory leak
         self._calls = {k: v for k, v in self._calls.items() if v}
         return True
+
+    async def check_async(self, key: str = "default") -> bool:
+        """Async version of check() for use in async contexts."""
+        async with self._lock:
+            return self.check(key)
 
     def cleanup(self):
         """Remove expired keys to prevent memory leak."""

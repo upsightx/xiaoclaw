@@ -33,6 +33,7 @@ dependencies = [
 telegram = ["python-telegram-bot>=21.0"]
 discord = ["discord.py>=2.3.0"]
 slack = ["slack-bolt>=1.18.0"]
+web = ["fastapi>=0.100.0", "uvicorn>=0.20.0"]
 api = ["fastapi>=0.100.0", "uvicorn>=0.20.0"]
 feishu = []
 all = ["python-telegram-bot>=21.0", "discord.py>=2.3.0", "slack-bolt>=1.18.0", "fastapi>=0.100.0", "uvicorn>=0.20.0"]

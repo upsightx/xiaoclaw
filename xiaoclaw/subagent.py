@@ -20,6 +20,9 @@ class SubagentResult:
 class SubagentManager:
     """Manages sub-agent instances for parallel task execution."""
 
+    # Maximum number of completed tasks to keep in memory
+    MAX_COMPLETED_TASKS = 100
+
     def __init__(self):
         self._tasks: Dict[str, SubagentResult] = {}
         self._running: Dict[str, asyncio.Task] = {}
@@ -33,6 +36,18 @@ class SubagentManager:
     def get_result(self, task_id: str) -> Optional[SubagentResult]:
         return self._tasks.get(task_id)
 
+    def _cleanup_completed_tasks(self):
+        """Remove old completed tasks to prevent memory leak."""
+        if len(self._tasks) > self.MAX_COMPLETED_TASKS:
+            # Keep only recent completed tasks
+            completed = [(tid, t) for tid, t in self._tasks.items() 
+                        if t.status in ("done", "error") and tid not in self._running]
+            if completed:
+                # Sort by task_id (which includes timestamp) and keep most recent
+                completed.sort(key=lambda x: x[0], reverse=True)
+                for tid, _ in completed[len(completed) - self.MAX_COMPLETED_TASKS:]:
+                    self._tasks.pop(tid, None)
+
     async def spawn(self, task: str, claw_factory, model: str = None) -> str:
         """Spawn a sub-agent to execute a task.
 
@@ -44,6 +59,9 @@ class SubagentManager:
         Returns:
             task_id for tracking
         """
+        # Cleanup old completed tasks before creating new ones
+        self._cleanup_completed_tasks()
+        
         task_id = str(uuid.uuid4())[:8]
         
         # Create result object and store immediately to avoid closure issues

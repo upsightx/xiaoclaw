@@ -476,16 +476,23 @@ def create_webui(claw=None):
 def run_webui(config=None, host: str = "0.0.0.0", port: int = 8080):
     """Run the Web UI server."""
     if not HAS_FASTAPI:
-        print("Error: FastAPI not installed. pip install fastapi uvicorn")
+        print("Error: FastAPI not installed. pip install xiaoclaw[web] or pip install fastapi uvicorn")
         return
     try:
         import uvicorn
     except ImportError:
-        print("Error: uvicorn not installed. pip install uvicorn")
+        print("Error: uvicorn not installed. pip install xiaoclaw[web] or pip install uvicorn")
         return
 
     from .core import XiaClaw
+    import asyncio
+    
     claw = XiaClaw(config) if config else None
     print(f"🐾 xiaoclaw Web UI starting at http://{host}:{port}")
     app = create_webui(claw=claw)
+    
+    # Create a new event loop to avoid asyncio.run() conflict
+    # when --web is called from within an existing event loop
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
     uvicorn.run(app, host=host, port=port)

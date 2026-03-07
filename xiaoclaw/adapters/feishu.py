@@ -7,7 +7,7 @@ import os
 import json
 import logging
 import time
-from typing import Dict, Any, Optional
+from typing import Dict, Optional
 
 logger = logging.getLogger("xiaoclaw.Feishu")
 
@@ -82,7 +82,7 @@ class FeishuAdapter:
             "content": json.dumps({"text": message})
         }
         
-        response = requests.post(url, params=params, headers=headers, json=data)
+        response = requests.post(url, params=params, headers=headers, json=data, timeout=10)
         result = response.json()
         
         # Check for errors
@@ -92,7 +92,7 @@ class FeishuAdapter:
             if result.get("code") == 99991663:  # Token expired
                 self.get_tenant_access_token(force_refresh=True)
                 headers["Authorization"] = f"Bearer {self.access_token}"
-                response = requests.post(url, params=params, headers=headers, json=data)
+                response = requests.post(url, params=params, headers=headers, json=data, timeout=10)
                 result = response.json()
         
         return result

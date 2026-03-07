@@ -1,7 +1,6 @@
 """xiaoclaw Telegram Adapter - python-telegram-bot integration"""
 import os
 import logging
-import asyncio
 from typing import Optional, TYPE_CHECKING
 
 logger = logging.getLogger("xiaoclaw.Telegram")
