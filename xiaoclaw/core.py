@@ -32,6 +32,20 @@ VERSION = "0.3.1"
 # Pre-compiled regex for stripping <think> tags (used in hot path)
 _THINK_RE = re.compile(r'<think>.*?</think>\s*', re.DOTALL)
 
+# ─── Friendly LLM Error Messages ─────────────────────
+LLM_ERROR_MESSAGES = {
+    "AuthenticationError": "🔐 API 认证失败，请检查 API Key 是否正确",
+    "RateLimitError": "⚠️ 请求频率过高，请稍后再试",
+    "APIConnectionError": "🌐 无法连接到 API 服务，请检查网络",
+    "Timeout": "⏱️ 请求超时，请重试",
+    "TimeoutError": "⏱️ 请求超时，请重试",
+    "BadRequestError": "⚠️ 请求参数有误",
+    "InvalidRequestError": "⚠️ 请求参数有误",
+    "APIStatusError": "🌐 API 服务暂时不可用",
+    "PermissionDeniedError": "🚫 API 权限不足",
+    "NotFoundError": "⚠️ 模型或端点不存在，请检查配置",
+}
+
 # ─── Config ───────────────────────────────────────────
 
 @dataclass
@@ -658,8 +672,10 @@ class XiaClaw:
                     tools=tool_defs, max_tokens=2000,
                 )
             except Exception as e:
-                logger.error(f"LLM error after retries: {e}")
-                yield f"[LLM Error: {type(e).__name__}]"; return
+                error_type = type(e).__name__
+                user_msg = LLM_ERROR_MESSAGES.get(error_type, f"❌ 发生错误: {str(e)[:100]}")
+                logger.error(f"LLM error after retries: {error_type}: {e}")
+                yield user_msg; return
 
             usage = getattr(resp, 'usage', None)
             self.stats.record(usage)
@@ -685,14 +701,26 @@ class XiaClaw:
                 async def _run_tool(tc):
                     name = tc.function.name
                     try: args = json.loads(tc.function.arguments)
-                    except json.JSONDecodeError: args = {}
-                    await self.hooks.fire("before_tool_call", tool=name, args=args)
-                    self.security.log_tool_call(name, args)
-                    result = str(self.tools.call(name, args) or "")
-                    self.stats.record_tool()
-                    await self.hooks.fire("after_tool_call", tool=name, args=args, result=result)
-                    logger.info(f"Tool: {name}({list(args.keys())}) → {len(result)} chars")
-                    return tc, name, args, result
+                    except json.JSONDecodeError:
+                        args = {}
+                        logger.warning(f"Tool args parse error for {name}")
+                    try:
+                        await self.hooks.fire("before_tool_call", tool=name, args=args)
+                        self.security.log_tool_call(name, args)
+                        result = str(self.tools.call(name, args) or "")
+                        self.stats.record_tool()
+                        await self.hooks.fire("after_tool_call", tool=name, args=args, result=result)
+                        logger.info(f"Tool: {name}({list(args.keys())}) → {len(result)} chars")
+                        return tc, name, args, result
+                    except PermissionError as e:
+                        logger.warning(f"Tool permission error: {name}: {e}")
+                        return tc, name, args, f"🚫 权限不足: {e}"
+                    except FileNotFoundError as e:
+                        logger.warning(f"Tool file not found: {name}: {e}")
+                        return tc, name, args, f"📁 文件不存在: {e}"
+                    except Exception as e:
+                        logger.error(f"Tool error: {name}: {e}", exc_info=True)
+                        return tc, name, args, f"❌ 工具执行失败: {type(e).__name__}: {str(e)[:100]}"
 
                 tool_calls = choice.message.tool_calls
                 if len(tool_calls) > 1:

@@ -2,6 +2,7 @@
 import sys
 import os
 import re
+import shlex
 import logging
 import asyncio
 import readline
@@ -9,7 +10,13 @@ import getpass
 from pathlib import Path
 
 from .core import XiaClaw, XiaClawConfig, VERSION
+from .errors import XError
+from .spinner import Spinner
 from .battle import BattleEngine, PRESET_ROLES, DEFAULT_BATTLE_ROLES, list_preset_roles, format_battle_output
+
+# ── History persistence ───────────────────────────────────────
+HISTORY_FILE = Path.home() / ".xiaoclaw" / "history"
+MAX_HISTORY = 1000
 
 # ── Slash command registry ────────────────────────────────────
 SLASH_COMMANDS = {
@@ -39,6 +46,13 @@ ALIASES = {"/q": "/quit", "/h": "/help", "/t": "/tools", "/s": "/sessions",
 
 # ── Tab completion ────────────────────────────────────────────
 class SlashCompleter:
+    """Enhanced completer with parameter completion."""
+    CMD_PARAMS = {
+        "/export": ["json", "md"],
+        "/skill": ["on", "off"],
+        "/loglevel": ["DEBUG", "INFO", "WARNING", "ERROR"],
+    }
+
     def __init__(self):
         self.matches = []
 
@@ -46,23 +60,64 @@ class SlashCompleter:
         if state == 0:
             line = readline.get_line_buffer().lstrip()
             if line.startswith("/"):
-                all_cmds = list(SLASH_COMMANDS.keys()) + list(ALIASES.keys())
-                self.matches = [c + " " for c in sorted(set(all_cmds)) if c.startswith(line)]
+                parts = line.split()
+                if len(parts) == 1 and not line.endswith(" "):
+                    # Complete command name
+                    all_cmds = list(SLASH_COMMANDS.keys()) + list(ALIASES.keys())
+                    self.matches = [c + " " for c in sorted(set(all_cmds)) if c.startswith(line)]
+                elif len(parts) >= 1:
+                    # Complete parameters
+                    cmd = ALIASES.get(parts[0], parts[0])
+                    params = self.CMD_PARAMS.get(cmd, [])
+                    prefix = parts[-1] if len(parts) > 1 and not line.endswith(" ") else ""
+                    self.matches = [p + " " for p in params if p.startswith(prefix)]
+                else:
+                    self.matches = []
             else:
                 self.matches = []
         return self.matches[state] if state < len(self.matches) else None
 
 
 def _setup_readline():
-    """Configure readline for slash command completion."""
+    """Configure readline with completion and history persistence."""
     comp = SlashCompleter()
     readline.set_completer(comp.complete)
     readline.set_completer_delims(" \t\n")
+    readline.set_history_length(MAX_HISTORY)
     # macOS uses libedit
     if "libedit" in (readline.__doc__ or ""):
         readline.parse_and_bind("bind ^I rl_complete")
     else:
         readline.parse_and_bind("tab: complete")
+    # Load history
+    try:
+        HISTORY_FILE.parent.mkdir(parents=True, exist_ok=True)
+        if HISTORY_FILE.exists():
+            readline.read_history_file(str(HISTORY_FILE))
+    except Exception:
+        pass
+
+
+def _save_history():
+    """Persist command history to disk."""
+    try:
+        HISTORY_FILE.parent.mkdir(parents=True, exist_ok=True)
+        readline.write_history_file(str(HISTORY_FILE))
+    except Exception:
+        pass
+
+
+# ── Command parsing ───────────────────────────────────────────
+def parse_slash_command(user_input: str) -> tuple:
+    """Parse slash command using shlex for proper quote handling.
+    Returns (command, [args])."""
+    try:
+        tokens = shlex.split(user_input)
+    except ValueError:
+        tokens = user_input.split()
+    if not tokens:
+        return ("", [])
+    return (tokens[0], tokens[1:])
 
 
 # ── Setup wizard ──────────────────────────────────────────────
@@ -274,13 +329,22 @@ async def main():
 
     # Help text (now properly placed after --web check)
     if "--help" in sys.argv or "-h" in sys.argv:
-        print(f"xiaoclaw v{VERSION} — Lightweight AI Agent")
-        print(f"  xiaoclaw              交互模式")
-        print(f"  xiaoclaw --setup      运行设置向导")
-        print(f"  xiaoclaw --debug      调试模式")
-        print(f"  xiaoclaw --web        启动 Web UI")
-        print(f"  xiaoclaw --test       自检测试")
-        print(f"  xiaoclaw --config X   指定配置文件")
+        print(f"\n  🐾 xiaoclaw v{VERSION} — Lightweight AI Agent\n")
+        print(f"  用法:")
+        print(f"    xiaoclaw              交互模式")
+        print(f"    xiaoclaw --setup      运行设置向导")
+        print(f"    xiaoclaw --debug      调试模式（显示详细日志）")
+        print(f"    xiaoclaw --web        启动 Web UI (http://localhost:8080)")
+        print(f"    xiaoclaw --test       自检测试")
+        print(f"    xiaoclaw --config X   指定配置文件")
+        print(f"\n  交互模式命令:")
+        print(f"    /help                 查看所有命令")
+        print(f"    /battle <问题>        多角色辩论分析")
+        print(f"    /tools                查看可用工具")
+        print(f"    /sessions             查看历史会话")
+        print(f"\n  快捷键: Tab=补全  ↑/↓=历史  Ctrl+C=退出")
+        print(f"\n  GitHub: https://github.com/upsightx/xiaoclaw")
+        print()
         return
 
     # Setup wizard
@@ -341,6 +405,17 @@ async def main():
         print("\n  📋 可用命令:\n")
         for cmd, desc in SLASH_COMMANDS.items():
             print(f"    {cmd:18s} {desc}")
+        print("\n  💡 示例:")
+        print("    /battle 微服务还是单体架构？    多角色辩论分析")
+        print("    /skill on github               启用 GitHub 技能")
+        print("    /export json                   导出会话为 JSON")
+        print("    /restore abc123                恢复历史会话")
+        print("    /loglevel DEBUG                设置日志级别")
+        print("    /analytics 30                  查看30天Token统计")
+        print("\n  ⌨️ 快捷键:")
+        print("    Tab                            命令补全")
+        print("    Ctrl+C                         退出")
+        print("    ↑/↓                            浏览历史命令")
         print()
 
     SIMPLE_CMDS = {
@@ -359,6 +434,7 @@ async def main():
         try:
             user_input = input("\n🧑 You: ").strip()
         except (KeyboardInterrupt, EOFError):
+            _save_history()
             await _save_session_memory(claw)
             print("\nBye!")
             break
@@ -373,6 +449,7 @@ async def main():
 
         # Quit
         if cmd in ("/quit",):
+            _save_history()
             claw.session.save()
             await _save_session_memory(claw)
             print("Bye!"); break
@@ -540,15 +617,39 @@ async def main():
             continue
 
         # ── Normal message → LLM ──────────────────────
-        print(f"\n🐾 xiaoclaw: ", end="", flush=True)
+        spinner = Spinner("思考中")
+        spinner.start()
+        first_chunk = True
         async for chunk in claw.handle_message_stream(user_input):
+            if first_chunk:
+                spinner.stop()
+                print(f"\n🐾 xiaoclaw: ", end="", flush=True)
+                first_chunk = False
             print(chunk, end="", flush=True)
+        if first_chunk:
+            spinner.stop()
+            print(f"\n🐾 xiaoclaw: ", end="", flush=True)
         print()
 
 
 def _cli_entry():
     """Entry point for `xiaoclaw` console command."""
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except XError as e:
+        print(e.format())
+        sys.exit(1)
+    except KeyboardInterrupt:
+        _save_history()
+        print("\nBye!")
+    except Exception as e:
+        if "--debug" in sys.argv:
+            import traceback
+            traceback.print_exc()
+        else:
+            print(f"❌ 发生错误: {e}")
+            print("   使用 --debug 查看详细信息")
+        sys.exit(1)
 
 def _run_webui(config):
     """Run Web UI mode."""

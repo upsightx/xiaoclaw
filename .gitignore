@@ -1,1 +1,7 @@
 __pycache__/
+# Build artifacts
+xiaoclaw.egg-info/
+.xiaoclaw/
+# Build artifacts
+xiaoclaw.egg-info/
+.xiaoclaw/
