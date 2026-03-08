@@ -33,6 +33,14 @@ class SlackAdapter:
         self._mention_pattern = re.compile(r'<@\w+>')
 
     def _check_channel(self, channel: str) -> bool:
+        """Check if channel is allowed.
+
+        Args:
+            channel: Slack channel ID.
+
+        Returns:
+            True if channel is allowed or no restriction configured.
+        """
         if self.allowed_channels is None:
             return True
         return channel in self.allowed_channels

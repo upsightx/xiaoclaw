@@ -6,7 +6,6 @@ import json
 import asyncio
 import inspect
 import logging
-from datetime import datetime
 from pathlib import Path
 from typing import Dict, Any, Optional, List
 from dataclasses import dataclass
@@ -16,10 +15,10 @@ from .providers import ProviderManager, ProviderConfig
 from .session import Session, SessionManager, count_messages_tokens
 from .memory import MemoryManager
 from .skills import SkillRegistry, register_builtin_skills
-from .tools import ToolRegistry, TOOL_DEFS
+from .tools import ToolRegistry
 from .plugins import PluginManager
 from .subagent import SubagentManager
-from .battle import BattleToolWrapper, PRESET_ROLES, list_preset_roles
+from .battle import BattleToolWrapper
 from .utils import SecurityManager, RateLimiter, TokenStats, HookManager
 
 logging.basicConfig(level=logging.WARNING, format='%(message)s')
@@ -140,8 +139,8 @@ def _friendly_tool_display(name: str, args: dict) -> str:
     if formatter:
         try:
             return formatter(args)
-        except Exception:
-            pass
+        except (KeyError, TypeError, ValueError) as e:
+            logger.debug(f"Display formatter failed for {name}: {e}")
     return f"⚙ {name}..."
 
 
@@ -259,11 +258,11 @@ class XiaClaw:
                     if param.annotation != inspect.Parameter.empty:
                         ann = param.annotation
                         # Check bool before int since bool is subclass of int
-                        if ann == bool:
+                        if ann is bool:
                             ptype = "boolean"
-                        elif ann == int:
+                        elif ann is int:
                             ptype = "integer"
-                        elif ann == float:
+                        elif ann is float:
                             ptype = "number"
                     elif param.default != inspect.Parameter.empty:
                         # Check bool before int since bool is subclass of int
@@ -277,7 +276,8 @@ class XiaClaw:
                     if param.default == inspect.Parameter.empty:
                         required.append(pname)
                 return {"type": "object", "properties": props, "required": required}
-            except Exception:
+            except (TypeError, ValueError, AttributeError) as e:
+                logger.debug(f"Schema generation failed: {e}")
                 return {"type": "object", "properties": {}, "required": []}
 
         def _auto_desc(func, tool_name):
@@ -399,8 +399,8 @@ class XiaClaw:
                 try:
                     content = fp.read_text(encoding="utf-8")
                     parts.append(f"## {name}\n{content[:3000]}")
-                except Exception:
-                    pass
+                except (OSError, UnicodeDecodeError) as e:
+                    logger.debug(f"Failed to read {name}: {e}")
         # Read MEMORY.md (long-term memory)
         memory_content = self.memory.read_memory()
         if memory_content:
@@ -450,8 +450,8 @@ class XiaClaw:
                     self.reload_config(self._config_path)
                     self._invalidate_caches()
                     logger.info("Config hot-reloaded")
-        except Exception:
-            pass
+        except (OSError, ValueError, KeyError) as e:
+            logger.debug(f"Config hot-reload check failed: {e}")
 
     def _system_prompt(self) -> str:
         if self._cached_system_prompt is not None:
@@ -468,8 +468,8 @@ class XiaClaw:
                 return tmpl.replace("{{version}}", VERSION).replace(
                     "{{tools}}", ", ".join(self.tools.list_names())
                 ).replace("{{bootstrap}}", self.bootstrap_context[:3000])
-            except Exception:
-                pass
+            except (OSError, UnicodeDecodeError) as e:
+                logger.debug(f"Failed to read prompt template: {e}")
 
         # Build tool descriptions
         tool_descriptions = []

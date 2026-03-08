@@ -1,16 +1,33 @@
 """xiaoclaw API Server — lightweight FastAPI-based HTTP interface"""
+import os
 import logging
-from typing import Optional
 
 logger = logging.getLogger("xiaoclaw.API")
 
 try:
-    from fastapi import FastAPI, HTTPException
+    from fastapi import FastAPI, HTTPException, Depends, Security
+    from fastapi.security import APIKeyHeader
     from fastapi.responses import StreamingResponse
     from pydantic import BaseModel
     HAS_FASTAPI = True
 except ImportError:
     HAS_FASTAPI = False
+
+# API Key authentication
+API_KEY_HEADER = APIKeyHeader(name="X-API-Key", auto_error=False) if HAS_FASTAPI else None
+
+def get_api_key(api_key: str = Depends(API_KEY_HEADER) if API_KEY_HEADER else None) -> str:
+    """Validate API key from header. Returns the key if valid, raises 401 if invalid."""
+    expected_key = os.getenv("XIAOCLAW_API_KEY", "")
+    # If no API key configured, deny all requests for security
+    if not expected_key:
+        logger.error("XIAOCLAW_API_KEY not configured - rejecting all API requests")
+        raise HTTPException(status_code=401, detail="API key not configured on server")
+    if not api_key:
+        raise HTTPException(status_code=401, detail="Missing API key")
+    if api_key != expected_key:
+        raise HTTPException(status_code=401, detail="Invalid API key")
+    return api_key
 
 
 def create_app(claw=None):
@@ -36,14 +53,15 @@ def create_app(claw=None):
 
     @app.get("/healthz")
     async def healthz():
+        """Health check endpoint - no auth required for monitoring."""
         return claw.health_check()
 
     @app.get("/version")
-    async def version():
+    async def version(api_key: str = Depends(get_api_key)):
         return {"version": VERSION}
 
     @app.post("/chat", response_model=ChatResponse)
-    async def chat(req: ChatRequest):
+    async def chat(req: ChatRequest, api_key: str = Depends(get_api_key)):
         if req.stream:
             async def gen():
                 async for chunk in claw.handle_message_stream(req.message, user_id=req.user_id):
@@ -53,11 +71,11 @@ def create_app(claw=None):
         return ChatResponse(response=reply, session_id=claw.session.session_id)
 
     @app.get("/tools")
-    async def tools():
+    async def tools(api_key: str = Depends(get_api_key)):
         return {"tools": claw.tools.list_names()}
 
     @app.get("/stats")
-    async def stats():
+    async def stats(api_key: str = Depends(get_api_key)):
         return {
             "total_tokens": claw.stats.total_tokens,
             "prompt_tokens": claw.stats.prompt_tokens,
@@ -67,11 +85,11 @@ def create_app(claw=None):
         }
 
     @app.get("/sessions")
-    async def sessions():
+    async def sessions(api_key: str = Depends(get_api_key)):
         return {"sessions": claw.session_mgr.list_sessions()}
 
     @app.post("/sessions/clear")
-    async def clear_session():
+    async def clear_session(api_key: str = Depends(get_api_key)):
         claw.session = claw.session_mgr.new_session()
         return {"session_id": claw.session.session_id}
 

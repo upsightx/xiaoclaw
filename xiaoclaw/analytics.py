@@ -1,6 +1,5 @@
 """xiaoclaw Analytics — Token usage tracking and statistics"""
 import json
-import time
 import logging
 from pathlib import Path
 from datetime import datetime, timedelta

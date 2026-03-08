@@ -275,8 +275,15 @@ class TestWebhook:
     async def test_dispatch(self):
         from xiaoclaw.webhook import WebhookServer, generic_webhook
         ws = WebhookServer()
-        ws.register("test", "/hook", generic_webhook)
-        result = await ws.dispatch("/hook", b'{"key":"value"}', {})
+        ws.register("test", "/hook", generic_webhook, secret="test-secret")
+        result = await ws.dispatch("/hook", b'{"key":"value"}', {"x-hub-signature-256": "sha256=invalid"})
+        assert result.get("error") == "Invalid signature"  # Signature must be valid
+        # Test with correct signature
+        import hmac
+        import hashlib
+        body = b'{"key":"value"}'
+        sig = hmac.new(b"test-secret", body, hashlib.sha256).hexdigest()
+        result = await ws.dispatch("/hook", body, {"x-hub-signature-256": f"sha256={sig}"})
         assert result.get("ok") is True
 
     @pytest.mark.asyncio

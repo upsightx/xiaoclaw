@@ -1,7 +1,6 @@
 """xiaoclaw Web Tools - real web_search and web_fetch implementations"""
 import re
 import logging
-from typing import Dict, List
 from urllib.parse import quote_plus, urlparse
 
 try:

@@ -1,8 +1,6 @@
 """xiaoclaw Web UI — modern chat interface with FastAPI backend"""
 import logging
-from pathlib import Path
-from typing import Optional, AsyncGenerator
-from datetime import datetime
+from typing import Optional
 
 logger = logging.getLogger("xiaoclaw.WebUI")
 
