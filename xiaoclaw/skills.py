@@ -4,7 +4,7 @@ import logging
 import importlib
 import importlib.util
 from pathlib import Path
-from typing import Dict, Any, Optional, List, Callable
+from typing import Dict, Optional, List, Callable
 from dataclasses import dataclass, field
 
 logger = logging.getLogger("xiaoclaw.Skills")

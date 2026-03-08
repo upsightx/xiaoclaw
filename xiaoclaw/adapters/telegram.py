@@ -1,7 +1,6 @@
 """xiaoclaw Telegram Adapter - python-telegram-bot integration"""
 import os
 import logging
-import asyncio
 from typing import Optional, TYPE_CHECKING
 
 logger = logging.getLogger("xiaoclaw.Telegram")
@@ -37,6 +36,10 @@ class TelegramAdapter:
             logger.error("python-telegram-bot not installed. pip install 'xiaoclaw[telegram]'")
 
     async def _cmd_start(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+        """Handle /start command.
+
+        Sends a welcome message to the user.
+        """
         if not self._check_user(update):
             return
         await update.message.reply_text(
@@ -44,6 +47,10 @@ class TelegramAdapter:
         )
 
     async def _cmd_clear(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+        """Handle /clear command.
+
+        Resets the user's session to start a fresh conversation.
+        """
         if not self._check_user(update) or not self.claw:
             return
         uid = update.effective_user.id
@@ -52,12 +59,21 @@ class TelegramAdapter:
         await update.message.reply_text("🔄 New session started.")
 
     async def _cmd_tools(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+        """Handle /tools command.
+
+        Lists all available tools.
+        """
         if not self._check_user(update) or not self.claw:
             return
         tools = ", ".join(self.claw.tools.list_names())
         await update.message.reply_text(f"🔧 Tools: {tools}")
 
     async def _handle_message(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+        """Handle incoming text messages.
+
+        Processes the message through xiaoclaw and sends the reply.
+        Splits long messages to fit Telegram's 4096 character limit.
+        """
         if not self._check_user(update) or not self.claw:
             return
         text = update.message.text
@@ -86,6 +102,10 @@ class TelegramAdapter:
             await update.message.reply_text("❌ Something went wrong, please try again.")
 
     def _check_user(self, update: Update) -> bool:
+        """Check if user is authorized.
+
+        Returns True if no user restriction or user is in allowed list.
+        """
         if self.allowed_users is None:
             return True
         uid = update.effective_user.id

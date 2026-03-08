@@ -1,11 +1,9 @@
 """xiaoclaw Tool Registry — built-in tools and OpenAI function definitions"""
-import os
 import subprocess
-import fnmatch
 import re
 import json
 from pathlib import Path
-from typing import Dict, Any, Optional, List, Callable
+from typing import Dict, Optional, List, Callable
 
 from .web import web_search as _web_search, web_fetch as _web_fetch
 
@@ -102,7 +100,8 @@ class ToolRegistry:
         try:
             resolved = p.resolve()
             return str(resolved).startswith(str(self.workspace))
-        except Exception:
+        except (OSError, ValueError) as e:
+            logger.debug(f"Path resolution failed for {p}: {e}")
             return False
 
     def get(self, name: str): return self.tools.get(name)
@@ -278,8 +277,8 @@ class ToolRegistry:
                         results.append(f"{rel}:{i+1}: {line.strip()[:120]}")
                         if len(results) >= int(max_results):
                             return
-            except Exception:
-                pass
+            except UnicodeDecodeError:
+                pass  # Skip binary files
 
         if p.is_file():
             _search_file(p)
@@ -427,7 +426,7 @@ class ToolRegistry:
                     pdesc = pdef.get("description", "") if isinstance(pdef, dict) else str(pdef)
                     param_lines.append(f"  - {pname} ({ptype}): {pdesc}")
                 params_block = "\n".join(param_lines)
-            except Exception:
+            except (TypeError, AttributeError, KeyError):
                 params_block = f"  - (see code for parameters)"
 
         # Create SKILL.md

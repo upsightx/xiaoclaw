@@ -3,7 +3,7 @@ import json
 import hmac
 import hashlib
 import logging
-from typing import Dict, Any, Optional, Callable, List
+from typing import Dict, Any, Callable, List
 
 logger = logging.getLogger("xiaoclaw.Webhook")
 
@@ -42,9 +42,18 @@ class WebhookServer:
         return [{"name": h.name, "path": h.path} for h in self.handlers.values()]
 
     def verify_signature(self, handler: WebhookHandler, body: bytes, signature: str) -> bool:
-        """Verify HMAC-SHA256 webhook signature."""
+        """Verify HMAC-SHA256 webhook signature.
+        
+        Returns:
+            True if signature is valid
+            False if signature is invalid
+        
+        Raises:
+            ValueError if secret is not configured (security requirement)
+        """
         if not handler.secret:
-            return True
+            logger.error(f"Webhook handler '{handler.name}' has no secret configured - rejecting for security")
+            raise ValueError("Webhook secret not configured - signature verification required")
         expected = hmac.new(handler.secret.encode(), body, hashlib.sha256).hexdigest()
         return hmac.compare_digest(f"sha256={expected}", signature)
 
@@ -52,11 +61,15 @@ class WebhookServer:
         """Dispatch incoming webhook to matching handler."""
         for handler in self.handlers.values():
             if handler.path == path:
-                # Verify signature if secret is set
+                # Verify signature (mandatory for security)
                 sig = headers.get("x-hub-signature-256", headers.get("x-signature", ""))
-                if handler.secret and not self.verify_signature(handler, body, sig):
-                    logger.warning(f"Webhook signature mismatch: {handler.name}")
-                    return {"error": "Invalid signature", "status": 403}
+                try:
+                    if not self.verify_signature(handler, body, sig):
+                        logger.warning(f"Webhook signature mismatch: {handler.name}")
+                        return {"error": "Invalid signature", "status": 403}
+                except ValueError as e:
+                    logger.error(f"Webhook security error: {e}")
+                    return {"error": str(e), "status": 500}
 
                 try:
                     payload = json.loads(body) if body else {}

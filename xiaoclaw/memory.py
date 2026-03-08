@@ -1,9 +1,8 @@
 """xiaoclaw Memory System - Compatible with OpenClaw memory format"""
-import re
 import logging
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import List, Dict, Optional, Tuple
+from typing import List, Dict, Optional
 
 logger = logging.getLogger("xiaoclaw.Memory")
 

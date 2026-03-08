@@ -78,8 +78,8 @@ class SecurityManager:
             ts = _time.strftime("%Y-%m-%d %H:%M:%S")
             with open(self._audit_log, "a") as f:
                 f.write(f"[{ts}] {event}: {detail[:200]}\n")
-        except Exception:
-            pass
+        except (OSError, IOError):
+            pass  # Silently ignore logging failures
 
     def log_tool_call(self, tool: str, args: dict):
         """Log tool invocations for audit."""
@@ -88,48 +88,55 @@ class SecurityManager:
 
 # ─── Rate Limiter ─────────────────────────────────────
 
+import threading
+
 class RateLimiter:
-    """Simple token-bucket rate limiter."""
+    """Simple token-bucket rate limiter with thread safety."""
     def __init__(self, max_calls: int = 30, window_sec: int = 60):
         self.max_calls = max_calls
         self.window = window_sec
         self._calls: Dict[str, List[float]] = {}
+        self._lock = threading.Lock()  # Thread safety
 
     def check(self, key: str = "default") -> bool:
-        now = _time.time()
-        calls = self._calls.setdefault(key, [])
-        self._calls[key] = [t for t in calls if now - t < self.window]
-        if len(self._calls[key]) >= self.max_calls:
-            return False
-        self._calls[key].append(now)
-        # Cleanup: remove keys with empty call lists to prevent memory leak
-        self._calls = {k: v for k, v in self._calls.items() if v}
-        return True
+        with self._lock:
+            now = _time.time()
+            calls = self._calls.setdefault(key, [])
+            self._calls[key] = [t for t in calls if now - t < self.window]
+            if len(self._calls[key]) >= self.max_calls:
+                return False
+            self._calls[key].append(now)
+            # Cleanup: remove keys with empty call lists to prevent memory leak
+            self._calls = {k: v for k, v in self._calls.items() if v}
+            return True
 
     def cleanup(self):
         """Remove expired keys to prevent memory leak."""
-        now = _time.time()
-        self._calls = {
-            k: [t for t in v if now - t < self.window]
-            for k, v in self._calls.items()
-        }
-        # Remove keys with empty lists
-        self._calls = {k: v for k, v in self._calls.items() if v}
+        with self._lock:
+            now = _time.time()
+            self._calls = {
+                k: [t for t in v if now - t < self.window]
+                for k, v in self._calls.items()
+            }
+            # Remove keys with empty lists
+            self._calls = {k: v for k, v in self._calls.items() if v}
 
     def remaining(self, key: str = "default") -> int:
-        now = _time.time()
-        calls = [t for t in self._calls.get(key, []) if now - t < self.window]
-        return max(0, self.max_calls - len(calls))
+        with self._lock:
+            now = _time.time()
+            calls = [t for t in self._calls.get(key, []) if now - t < self.window]
+            return max(0, self.max_calls - len(calls))
 
     def wait_time(self, key: str = "default") -> float:
         """Return seconds to wait before a slot becomes available."""
-        now = _time.time()
-        calls = sorted([t for t in self._calls.get(key, []) if now - t < self.window])
-        if len(calls) < self.max_calls:
-            return 0
-        # Time until oldest call expires
-        oldest = calls[0]
-        return max(0, self.window - (now - oldest))
+        with self._lock:
+            now = _time.time()
+            calls = sorted([t for t in self._calls.get(key, []) if now - t < self.window])
+            if len(calls) < self.max_calls:
+                return 0
+            # Time until oldest call expires
+            oldest = calls[0]
+            return max(0, self.window - (now - oldest))
 
 
 # ─── Token Stats ──────────────────────────────────────

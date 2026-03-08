@@ -86,6 +86,23 @@ docker run -it \
 
 ### pip
 
+**Ubuntu/Debian 用户：** 安装前请先安装 python3-venv：
+
+```bash
+sudo apt update && sudo apt install python3-venv -y
+```
+
+然后执行标准安装流程：
+
+```bash
+git clone https://github.com/upsightx/xiaoclaw.git && cd xiaoclaw
+python3 -m venv .venv
+source .venv/bin/activate  # Windows: .venv\Scripts\activate
+pip install -e ".[all,dev]"
+xiaoclaw          # 首次运行会启动设置向导
+xiaoclaw --setup  # 重新运行设置向导
+```
+
 ### Web UI（推荐新手）
 
 一键启动浏览器界面：
@@ -218,6 +235,67 @@ xiaoclaw/
     ├── weather.py
     ├── github/
     └── feishu/
+```
+
+## 故障排查
+
+### 常见问题
+
+**Q: 运行 `xiaoclaw --web` 提示依赖缺失**
+
+```bash
+# Web UI 需要额外依赖
+pip install xiaoclaw[web]
+# 或安装全部功能
+pip install xiaoclaw[all]
+```
+
+**Q: 首次运行显示 "API Key 未配置"**
+
+运行设置向导配置：
+```bash
+xiaoclaw --setup
+```
+或直接设置环境变量：
+```bash
+export OPENAI_API_KEY=sk-your-key
+export OPENAI_BASE_URL=https://api.openai.com/v1  # 可选
+export XIAOCLAW_MODEL=gpt-4  # 可选
+```
+
+**Q: Ubuntu/Debian 创建虚拟环境失败**
+
+```bash
+sudo apt install python3-venv -y
+```
+
+**Q: Windows PowerShell 执行策略错误**
+
+```powershell
+Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
+```
+
+**Q: 未知选项错误**
+
+检查命令格式：
+```bash
+xiaoclaw --help  # 查看可用选项
+```
+
+### 调试模式
+
+启用详细日志排查问题：
+```bash
+xiaoclaw --debug
+# 或设置日志级别
+xiaoclaw --log-level DEBUG
+```
+
+### 自检测试
+
+运行内置测试验证安装：
+```bash
+xiaoclaw --test
 ```
 
 ## License

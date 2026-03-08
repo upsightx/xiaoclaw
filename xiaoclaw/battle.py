@@ -7,7 +7,7 @@ import asyncio
 import re
 import json
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Dict, List, Optional, Any
 
 logger = logging.getLogger("xiaoclaw.Battle")

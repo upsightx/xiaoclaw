@@ -32,8 +32,8 @@ def count_tokens(text: str, model: str = "gpt-4") -> int:
             if model not in _encoder_cache:
                 _encoder_cache[model] = tiktoken.encoding_for_model(model)
             return len(_encoder_cache[model].encode(text))
-        except Exception:
-            pass
+        except (ImportError, KeyError, UnicodeDecodeError):
+            logger.debug(f"tiktoken encoding failed for model {model}, using estimate")
     return len(text) // 3  # rough estimate
 
 
@@ -214,7 +214,7 @@ class SessionManager:
             try:
                 first_line = f.read_text(encoding="utf-8").split("\n")[0]
                 meta = json.loads(first_line) if first_line else {}
-            except Exception:
+            except (OSError, json.JSONDecodeError):
                 meta = {}
             # Check for both old (_meta) and new (_xc_meta) sentinel
             result.append({

@@ -12,7 +12,7 @@ from pathlib import Path
 from .core import XiaClaw, XiaClawConfig, VERSION
 from .errors import XError
 from .spinner import Spinner
-from .battle import BattleEngine, PRESET_ROLES, DEFAULT_BATTLE_ROLES, list_preset_roles, format_battle_output
+from .battle import BattleEngine, PRESET_ROLES, DEFAULT_BATTLE_ROLES, list_preset_roles
 
 # ── History persistence ───────────────────────────────────────
 HISTORY_FILE = Path.home() / ".xiaoclaw" / "history"
@@ -225,7 +225,18 @@ def _run_setup_wizard() -> XiaClawConfig:
         except Exception as e:
             return False, str(e)
 
-    success, msg = _aio.run(_test())
+    # 兼容已有事件循环的情况（如 nest_asyncio 或 Jupyter）
+    try:
+        loop = _aio.get_running_loop()
+    except RuntimeError:
+        loop = None
+    
+    if loop and loop.is_running():
+        import concurrent.futures
+        with concurrent.futures.ThreadPoolExecutor() as pool:
+            success, msg = pool.submit(lambda: _aio.run(_test())).result(timeout=30)
+    else:
+        success, msg = _aio.run(_test())
     if success:
         print(f" ✅ 成功！({default_model})")
     else:
@@ -299,7 +310,6 @@ async def _save_session_memory(claw):
         msgs = claw.session.messages
         if len(msgs) < 2:
             return
-        from datetime import datetime
         entries = []
         for msg in msgs:
             if msg.get("role") == "user":
@@ -321,34 +331,14 @@ async def main():
         if arg == "--config" and i + 1 < len(sys.argv):
             config_path = sys.argv[i + 1]
 
-    if "--web" in sys.argv or "--webui" in sys.argv:
-        _load_saved_config()
-        config = XiaClawConfig.from_yaml(config_path) if config_path else XiaClawConfig.from_env()
-        _run_webui(config)
-        return
-
-    # Help text (now properly placed after --web check)
-    if "--help" in sys.argv or "-h" in sys.argv:
-        print(f"\n  🐾 xiaoclaw v{VERSION} — Lightweight AI Agent\n")
-        print(f"  用法:")
-        print(f"    xiaoclaw              交互模式")
-        print(f"    xiaoclaw --setup      运行设置向导")
-        print(f"    xiaoclaw --debug      调试模式（显示详细日志）")
-        print(f"    xiaoclaw --web        启动 Web UI (http://localhost:8080)")
-        print(f"    xiaoclaw --test       自检测试")
-        print(f"    xiaoclaw --config X   指定配置文件")
-        print(f"\n  交互模式命令:")
-        print(f"    /help                 查看所有命令")
-        print(f"    /battle <问题>        多角色辩论分析")
-        print(f"    /tools                查看可用工具")
-        print(f"    /sessions             查看历史会话")
-        print(f"\n  快捷键: Tab=补全  ↑/↓=历史  Ctrl+C=退出")
-        print(f"\n  GitHub: https://github.com/upsightx/xiaoclaw")
-        print()
-        return
-
-    # Setup wizard
-    if "--setup" in sys.argv or _needs_setup():
+    # Setup wizard (skip for --test mode - already handled in _cli_entry for version/help/web)
+    # For --test mode, use a minimal config or env vars
+    if "--test" in sys.argv:
+        config = XiaClawConfig.from_env()
+        if not config.api_key:
+            # Use a dummy key for testing
+            config = XiaClawConfig(api_key="test-key-for-self-test")
+    elif "--setup" in sys.argv or _needs_setup():
         config = _run_setup_wizard()
     else:
         config = XiaClawConfig.from_yaml(config_path) if config_path else XiaClawConfig.from_env()
@@ -634,6 +624,59 @@ async def main():
 
 def _cli_entry():
     """Entry point for `xiaoclaw` console command."""
+    # Handle --version outside asyncio (before any async setup)
+    if "--version" in sys.argv or "-v" in sys.argv:
+        print(f"xiaoclaw v{VERSION}")
+        return
+
+    # Handle --help outside asyncio
+    if "--help" in sys.argv or "-h" in sys.argv:
+        print(f"xiaoclaw v{VERSION} - Lightweight AI Agent")
+        print()
+        print("用法:")
+        print("  xiaoclaw              启动交互式CLI")
+        print("  xiaoclaw --web        启动Web UI (http://localhost:8080)")
+        print("  xiaoclaw --setup      运行设置向导")
+        print("  xiaoclaw --test       运行自检测试")
+        print("  xiaoclaw --version    显示版本")
+        print()
+        print("选项:")
+        print("  --debug               启用调试日志")
+        print("  --log-level <LEVEL>   设置日志级别 (DEBUG/INFO/WARNING/ERROR)")
+        print()
+        print("详情: https://github.com/upsightx/xiaoclaw")
+        return
+
+    # Collect valid CLI options
+    validopts = {"--setup", "--web", "--test", "--debug", "--version", "--help", "-v", "-h", "--log-level"}
+    
+    # Check for invalid arguments
+    for arg in sys.argv[1:]:
+        if arg.startswith("-") and arg not in validopts:
+            print(f"❌ 未知选项: {arg}")
+            print("   使用 --help 查看可用选项")
+            sys.exit(1)
+
+    # Handle --test BEFORE setup wizard check
+    if "--test" in sys.argv:
+        # Skip setup wizard for test mode
+        pass
+
+    # Handle --web outside asyncio (uvicorn manages its own event loop)
+    if "--web" in sys.argv:
+        try:
+            from .config import XiaClawConfig
+            config = XiaClawConfig.from_env()
+            _run_webui(config)
+        except ImportError as e:
+            print("❌ Web UI 需要额外依赖")
+            print("   请运行: pip install xiaoclaw[web]")
+            sys.exit(1)
+        except XError as e:
+            print(e.format())
+            sys.exit(1)
+        return
+
     try:
         asyncio.run(main())
     except XError as e:
