@@ -225,7 +225,18 @@ def _run_setup_wizard() -> XiaClawConfig:
         except Exception as e:
             return False, str(e)
 
-    success, msg = _aio.run(_test())
+    # 兼容已有事件循环的情况（如 nest_asyncio 或 Jupyter）
+    try:
+        loop = _aio.get_running_loop()
+    except RuntimeError:
+        loop = None
+    
+    if loop and loop.is_running():
+        import concurrent.futures
+        with concurrent.futures.ThreadPoolExecutor() as pool:
+            success, msg = pool.submit(lambda: _aio.run(_test())).result(timeout=30)
+    else:
+        success, msg = _aio.run(_test())
     if success:
         print(f" ✅ 成功！({default_model})")
     else:
